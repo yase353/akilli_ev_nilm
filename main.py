@@ -129,7 +129,7 @@ def get_test_device_details():
     
     try:
         result = query_api.query(org=INFLUX_ORG, query=query)
-        cihaz_listesi = []
+        test_cihaz_listesi = []
 
         for table in result:
             for record in table.records:
