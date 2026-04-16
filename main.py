@@ -117,37 +117,51 @@ def get_device_details():
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     query_api = client.query_api()
 
+    # Son 1 saatteki tüm cihazların en son verisini çeken sorgu
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -1h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+        |> filter(fn: (r) => r["_field"] == "guc")
         |> last()
     '''
     
     try:
         result = query_api.query(org=INFLUX_ORG, query=query)
-        liste = [] # Değişken ismini netleştirdik
+        cihaz_haritasi = {}
+
         for table in result:
             for record in table.records:
-                # Influx'tan gelen cihaz ismini alalım
-                isim = record.values.get("device", "Ana Hat")
-                deger = record.get_value()
-                liste.append({
-                    "cihaz": isim,
-                    "tuketim": f"{round(deger, 1)}W",
-                    "saatlik_maliyet": f"{round((deger/1000) * 2.59, 2)} TL",
-                    "durum": "Aktif"
-                })
-        
-        # Eğer liste boşsa Influx'ta veri yoktur
-        if not liste:
-            return [{"cihaz": "InfluxDB Veri Yok", "tuketim": "0W", "saatlik_maliyet": "0 TL", "durum": "-"}]
+                # Influx'taki etiket ismini kontrol et (device, tag_device veya sensor_id olabilir)
+                # Senin Influx yapına göre burayı 'device' olarak varsayıyorum
+                raw_name = record.values.get("device", "Bilinmeyen")
+                watt = record.get_value()
+
+                # İsimleri senin istediğin jüri formatına çevirelim
+                if "ana" in raw_name.lower() or "esp" in raw_name.lower():
+                    display_name = "Ana Hat (ESP32)"
+                elif "buz" in raw_name.lower() or "priz1" in raw_name.lower():
+                    display_name = "Akıllı Priz - Buzdolabı"
+                else:
+                    display_name = "Akıllı Priz - Seyyar (Fırın/Ütü)"
+
+                cihaz_haritasi[display_name] = {
+                    "cihaz": display_name,
+                    "tuketim": f"{round(watt, 1)}W",
+                    "saatlik_maliyet": f"{round((watt/1000) * 2.59, 2)} TL",
+                    "durum": "Aktif" if watt > 2 else "Beklemede"
+                }
+
+        # Haritayı listeye çeviriyoruz
+        final_liste = list(cihaz_haritasi.values())
+
+        if not final_liste:
+            return [{"cihaz": "Veri Bekleniyor...", "tuketim": "0W", "saatlik_maliyet": "0 TL", "durum": "-"}]
             
-        return liste
-        
+        return final_liste
+
     except Exception as e:
-        # Hata mesajını buraya yazdırıyoruz
-        return [{"cihaz": "Hata", "tuketim": str(e), "saatlik_maliyet": "-", "durum": "!"}]
+        return [{"cihaz": "Sistem Hatası", "tuketim": str(e)[:30], "saatlik_maliyet": "-", "durum": "!"}]
     finally:
         client.close()
 
