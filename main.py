@@ -35,17 +35,19 @@ def get_device_details():
     client = get_influx_client()
     query_api = client.query_api()
 
+    # Varsayılan boş tablo yapısı
     cihaz_sonuclari = {
-        "Ana Hat (ESP32)": {"cihaz": "Ana Hat (ESP32)", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
-        "Akıllı Priz - Buzdolabı": {"cihaz": "Buzdolabı", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
-        "Akıllı Priz - Seyyar": {"cihaz": "Seyyar Priz", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"}
+        "ana_sayac": {"cihaz": "Ana Hat (ESP32)", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
+        "utu": {"cihaz": "Akıllı Priz - Buzdolabı", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
+        "camasir_makinesi": {"cihaz": "Seyyar Priz", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"}
     }
 
-    # Influx'tan gelen etiketi (cihaz) doğru okumak için query
+    # Sorgu: Son 10 dakika içindeki TÜM cihaz etiketlerini getir
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -5m)
+        |> range(start: -10m)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+        |> filter(fn: (r) => r["_field"] == "guc")
         |> last()
     '''
     
@@ -53,25 +55,21 @@ def get_device_details():
         result = query_api.query(org=INFLUX_ORG, query=query)
         for table in result:
             for record in table.records:
-                # Influx'taki kolon ismin "cihaz" (image_a3cb2d.png'de görünen)
-                tag_name = record.values.get("cihaz", "bilinmeyen").lower()
+                # Influx'tan gelen etiketi al (ana_sayac, utu veya camasir_makinesi)
+                tag_name = record.values.get("cihaz", "")
                 watt = record.get_value()
                 
-                # EŞLEŞTİRME: Influx'taki "ana_sayac" ismini yakalıyoruz
-                key = None
-                if "ana" in tag_name: key = "Ana Hat (ESP32)"
-                elif "camasir" in tag_name: key = "Akıllı Priz - Seyyar"
-                elif "utu" in tag_name: key = "Akıllı Priz - Buzdolabı"
-
-                if key:
-                    cihaz_sonuclari[key].update({
+                if tag_name in cihaz_sonuclari:
+                    cihaz_sonuclari[tag_name].update({
                         "tuketim": f"{round(watt, 1)}W",
                         "saatlik_maliyet": f"{round((watt/1000) * 2.59, 2)} TL",
-                        "durum": "Aktif" if watt > 2 else "Beklemede"
+                        "durum": "Aktif" if watt > 5 else "Beklemede"
                     })
+        
+        # Sadece liste olarak döndür (Flutter'ın beklediği format)
         return list(cihaz_sonuclari.values())
     except Exception as e:
-        print(f"Hata: {e}")
+        print(f"Hata oluştu: {e}")
         return list(cihaz_sonuclari.values())
     finally:
         client.close()
@@ -101,28 +99,27 @@ def get_device_details():
     
     try:
         result = query_api.query(org=INFLUX_ORG, query=query)
+        toplam_watt = 0.0
+        
+        # Influx'taki tüm cihazların ortalamalarını topla
         for table in result:
             for record in table.records:
-                # InfluxDB'deki 'cihaz' etiketini al (ana_sayac, utu, vb.)
-                tag_name = str(record.values.get("cihaz", "")).lower()
-                watt = float(record.get_value())
-                
-                # Sadece ilgili cihazın verisini güncelle
-                target_key = None
-                if "ana" in tag_name: target_key = "Ana Hat (ESP32)"
-                elif "buz" in tag_name or "utu" in tag_name: target_key = "Akıllı Priz - Buzdolabı"
-                elif "camasir" in tag_name or "seyyar" in tag_name: target_key = "Akıllı Priz - Seyyar"
+                toplam_watt += record.get_value()
 
-                if target_key:
-                    cihaz_sonuclari[target_key].update({
-                        "tuketim": f"{round(watt, 1)}W",
-                        "saatlik_maliyet": f"{round((watt/1000) * 2.59, 2)} TL",
-                        "durum": "Aktif" if watt > 5 else "Beklemede"
-                    })
-        
-        return list(cihaz_sonuclari.values())
-    except Exception as e:
-        return list(cihaz_sonuclari.values())
+        aylik_kwh = (toplam_watt * 24 * 30) / 1000
+        tahmini_fatura = aylik_kwh * 2.59
+
+        # EĞER VERİ YOKSA (ESP32 kapalıysa) hata döndürme, 0 döndür
+        if toplam_watt == 0:
+             return {"tahmini_fatura": "0 TL", "aylik_tuketim_kwh": "0 kWh", "anlik_toplam_watt": "0 W"}
+
+        return {
+            "tahmini_fatura": f"{round(tahmini_fatura, 2)} TL",
+            "aylik_tuketim_kwh": f"{round(aylik_kwh, 1)} kWh",
+            "anlik_toplam_watt": f"{round(toplam_watt, 1)} W"
+        }
+    except:
+        return {"tahmini_fatura": "Bağlantı Yok", "aylik_tuketim_kwh": "0", "anlik_toplam_watt": "0"}
     finally:
         client.close()
 # ==========================================
