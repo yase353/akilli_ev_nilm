@@ -34,17 +34,18 @@ def get_influx_client():
 def get_device_details():
     client = get_influx_client()
     query_api = client.query_api()
-    # Sabit Şablon: Veri olmasa bile 3 cihaz gözüksün
+
     cihaz_sonuclari = {
         "Ana Hat (ESP32)": {"cihaz": "Ana Hat (ESP32)", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
-        "Akıllı Priz - Buzdolabı": {"cihaz": "Akıllı Priz - Buzdolabı", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
-        "Akıllı Priz - Seyyar": {"cihaz": "Akıllı Priz - Seyyar", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"}
+        "Akıllı Priz - Buzdolabı": {"cihaz": "Buzdolabı", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
+        "Akıllı Priz - Seyyar": {"cihaz": "Seyyar Priz", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"}
     }
+
+    # Influx'tan gelen etiketi (cihaz) doğru okumak için query
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -1h)
+        |> range(start: -5m)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
-        |> filter(fn: (r) => r["_field"] == "guc")
         |> last()
     '''
     
@@ -52,20 +53,25 @@ def get_device_details():
         result = query_api.query(org=INFLUX_ORG, query=query)
         for table in result:
             for record in table.records:
-                name = record.values.get("device", "Bilinmeyen").lower()
+                # Influx'taki kolon ismin "cihaz" (image_a3cb2d.png'de görünen)
+                tag_name = record.values.get("cihaz", "bilinmeyen").lower()
                 watt = record.get_value()
                 
-                # Eşleştirme Mantığı
-                key = "Akıllı Priz - Seyyar"
-                if "ana" in name or "esp" in name: key = "Ana Hat (ESP32)"
-                elif "buz" in name: key = "Akıllı Priz - Buzdolabı"
-                cihaz_sonuclari[key].update({
-                    "tuketim": f"{round(watt, 1)}W",
-                    "saatlik_maliyet": f"{round((watt/1000) * 2.59, 2)} TL",
-                    "durum": "Aktif" if watt > 2 else "Beklemede"
-                })
+                # EŞLEŞTİRME: Influx'taki "ana_sayac" ismini yakalıyoruz
+                key = None
+                if "ana" in tag_name: key = "Ana Hat (ESP32)"
+                elif "camasir" in tag_name: key = "Akıllı Priz - Seyyar"
+                elif "utu" in tag_name: key = "Akıllı Priz - Buzdolabı"
+
+                if key:
+                    cihaz_sonuclari[key].update({
+                        "tuketim": f"{round(watt, 1)}W",
+                        "saatlik_maliyet": f"{round((watt/1000) * 2.59, 2)} TL",
+                        "durum": "Aktif" if watt > 2 else "Beklemede"
+                    })
         return list(cihaz_sonuclari.values())
-    except:
+    except Exception as e:
+        print(f"Hata: {e}")
         return list(cihaz_sonuclari.values())
     finally:
         client.close()
@@ -115,7 +121,7 @@ def get_energy_history():
         |> range(start: -1h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
-        |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
+        |> aggregateWindow(every: 20s, fn: mean, createEmpty: false)
     '''
     try:
         result = query_api.query(org=INFLUX_ORG, query=query)
@@ -127,4 +133,3 @@ def get_energy_history():
         client.close()
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
-    
