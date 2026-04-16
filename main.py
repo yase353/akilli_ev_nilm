@@ -9,6 +9,7 @@ from datetime import datetime
 # ==========================================
 app = FastAPI(title="Akıllı Ev NILM Gelişmiş Arka Uç")
 
+# CORS ayarları: Flutter Web ve Dış dünyadan erişim için kritik
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,11 +18,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Ngrok tarayıcı uyarısını atlatmak için otomatik header ekleyici
 @app.middleware("http")
 async def add_ngrok_bypass_header(request, call_next):
     response = await call_next(request)
     response.headers["ngrok-skip-browser-warning"] = "true"
     return response
+
 # ==========================================
 # 2. INFLUXDB BAĞLANTI AYARLARI
 # ==========================================
@@ -39,7 +42,7 @@ def get_influx_client():
 
 @app.get("/ev-durumu")
 def get_home_status():
-    """Ana sayfa kartları için anlık veriler"""
+    """Ana sayfa kartları için InfluxDB'den anlık veri çeker"""
     client = get_influx_client()
     query_api = client.query_api()
 
@@ -63,6 +66,7 @@ def get_home_status():
                 elif record.get_field() == "cos_phi":
                     cos_phi_degeri = record.get_value()
 
+        # Basit fatura hesabı (Birim fiyat: 2.59 TL)
         elektrik_birim_fiyat = 2.59 
         tahmini_fatura = (guc_degeri / 1000) * 24 * 30 * elektrik_birim_fiyat
 
@@ -79,11 +83,10 @@ def get_home_status():
 
 @app.get("/enerji-gecmisi")
 def get_energy_history():
-    """Grafik için son 1 saatlik güç verisi (5 dakikalık ortalamalarla)"""
+    """Grafik için son 1 saatlik güç verisi"""
     client = get_influx_client()
     query_api = client.query_api()
 
-    # Grafik için zaman serisi sorgusu
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -1h)
@@ -111,18 +114,47 @@ def get_energy_history():
 
 @app.get("/cihaz-detaylari")
 def get_device_details():
-    """Tablo için çalışan cihazların detaylı listesi"""
-    # Burası ileride yapay zeka modelinden gelecek. 
-    # Şimdilik UI testleri için dinamik-simüle veri döndürüyoruz.
-    return [
-        {"cihaz": "Buzdolabı", "tuketim": "150W", "saatlik_maliyet": "0.38 TL", "durum": "Aktif"},
-        {"cihaz": "Çamaşır Makinesi", "tuketim": "2100W", "saatlik_maliyet": "5.44 TL", "durum": "Aktif"},
-        {"cihaz": "Klima", "tuketim": "0W", "saatlik_maliyet": "0.00 TL", "durum": "Kapalı"},
-        {"cihaz": "Aydınlatma", "tuketim": "40W", "saatlik_maliyet": "0.10 TL", "durum": "Aktif"},
-    ]
+    """Tablo için InfluxDB'den gerçek cihaz tag'lerine göre veri çeker"""
+    client = get_influx_client()
+    query_api = client.query_api()
+
+    # NOT: Buradaki 'cihaz_adi' tag'i InfluxDB'deki tag isminle aynı olmalı
+    query = f'''
+        from(bucket: "{INFLUX_BUCKET}")
+        |> range(start: -10m)
+        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+        |> filter(fn: (r) => r["_field"] == "guc")
+        |> last()
+    '''
+    
+    try:
+        result = query_api.query(org=INFLUX_ORG, query=query)
+        cihaz_listesi = []
+
+        for table in result:
+            for record in table.records:
+                # Influx'ta cihazları ayırt etmek için kullandığın tag (Örn: 'device')
+                cihaz_ismi = record.values.get("device", "Ana Hat") 
+                guc_degeri = record.get_value()
+                
+                cihaz_listesi.append({
+                    "cihaz": cihaz_ismi,
+                    "tuketim": f"{round(guc_degeri, 1)}W",
+                    "saatlik_maliyet": f"{round((guc_degeri / 1000) * 2.59, 2)} TL",
+                    "durum": "Aktif" if guc_degeri > 5 else "Kapalı"
+                })
+        
+        # Eğer Influx boş dönerse en azından boş liste gönder ki uygulama çökmesin
+        return cihaz_listesi if cihaz_listesi else [{"cihaz": "Veri Yok", "tuketim": "0W", "saatlik_maliyet": "0 TL", "durum": "-"}]
+    
+    except Exception as e:
+        return [{"cihaz": "Hata", "tuketim": str(e), "saatlik_maliyet": "-", "durum": "!"}]
+    finally:
+        client.close()
 
 # ==========================================
 # 4. ÇALIŞTIRMA
 # ==========================================
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+    
