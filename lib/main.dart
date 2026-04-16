@@ -38,7 +38,7 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
   double fatura = 0.0;
   bool yukleniyor = false;
 
-  final String apiBaseUrl = "https://amaya-uncrystalled-nonusurpingly.ngrok-free.dev"; 
+  final String apiBaseUrl = "https://akilli-ev-nilm.onrender.com"; 
 
   Future<void> verileriGetir() async {
     setState(() => yukleniyor = true);
