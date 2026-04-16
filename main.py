@@ -113,41 +113,40 @@ def get_energy_history():
         client.close()
 
 @app.get("/cihaz-detaylari")
-def get_test_device_details():
-    """Tablo için InfluxDB'den gerçek cihaz tag'lerine göre veri çeker"""
-    client = get_influx_client()
+def get_device_details():
+    client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     query_api = client.query_api()
 
-    # NOT: Buradaki 'cihaz_adi' tag'i InfluxDB'deki tag isminle aynı olmalı
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -10m)
+        |> range(start: -1h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
-        |> filter(fn: (r) => r["_field"] == "guc")
         |> last()
     '''
     
     try:
         result = query_api.query(org=INFLUX_ORG, query=query)
-        test_cihaz_listesi = []
-
+        liste = [] # Değişken ismini netleştirdik
         for table in result:
             for record in table.records:
-                # Influx'ta cihazları ayırt etmek için kullandığın tag (Örn: 'device')
-                test_cihaz_ismi = record.values.get("device", "Ana Hat") 
-                guc_degeri = record.get_value()
-                
-                test_cihaz_listesi.append({
-                    "cihaz": test_cihaz_ismi,
-                    "tuketim": f"{round(guc_degeri, 1)}W",
-                    "saatlik_maliyet": f"{round((guc_degeri / 1000) * 2.59, 2)} TL",
-                    "durum": "Aktif" if guc_degeri > 5 else "Kapalı"
+                # Influx'tan gelen cihaz ismini alalım
+                isim = record.values.get("device", "Ana Hat")
+                deger = record.get_value()
+                liste.append({
+                    "cihaz": isim,
+                    "tuketim": f"{round(deger, 1)}W",
+                    "saatlik_maliyet": f"{round((deger/1000) * 2.59, 2)} TL",
+                    "durum": "Aktif"
                 })
         
-        # Eğer Influx boş dönerse en azından boş liste gönder ki uygulama çökmesin
-        return cihaz_listesi if cihaz_listesi else [{"cihaz": "Veri Yok", "tuketim": "0W", "saatlik_maliyet": "0 TL", "durum": "-"}]
-    
+        # Eğer liste boşsa Influx'ta veri yoktur
+        if not liste:
+            return [{"cihaz": "InfluxDB Veri Yok", "tuketim": "0W", "saatlik_maliyet": "0 TL", "durum": "-"}]
+            
+        return liste
+        
     except Exception as e:
+        # Hata mesajını buraya yazdırıyoruz
         return [{"cihaz": "Hata", "tuketim": str(e), "saatlik_maliyet": "-", "durum": "!"}]
     finally:
         client.close()
