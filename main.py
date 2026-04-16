@@ -81,8 +81,8 @@ def get_device_details():
 # ==========================================
 # 3. FATURA TAHMİNİ VE ANALİZ (Yeni!)
 # ==========================================
-@app.get("/ev-analiz")
-def get_ev_analiz():
+@app.get("/ev-durumu")
+def get_ev_durumu():
     client = get_influx_client()
     query_api = client.query_api()
 
