@@ -121,7 +121,7 @@ def get_energy_history():
         |> range(start: -1h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
-        |> aggregateWindow(every: 20s, fn: mean, createEmpty: false)
+        |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
     '''
     try:
         result = query_api.query(org=INFLUX_ORG, query=query)
