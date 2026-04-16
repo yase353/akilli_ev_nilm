@@ -143,7 +143,7 @@ def get_device_details():
                 elif "buz" in raw_name.lower() or "priz1" in raw_name.lower():
                     display_name = "Akıllı Priz - Buzdolabı"
                 else:
-                    display_name = "Akıllı Priz - Seyyar (Fırın/Ütü)"
+                    display_name = "Akıllı Priz - Seyyar "
 
                 cihaz_haritasi[display_name] = {
                     "cihaz": display_name,
