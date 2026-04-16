@@ -113,7 +113,7 @@ def get_energy_history():
         client.close()
 
 @app.get("/cihaz-detaylari")
-def get_device_details():
+def get_test_device_details():
     """Tablo için InfluxDB'den gerçek cihaz tag'lerine göre veri çeker"""
     client = get_influx_client()
     query_api = client.query_api()
@@ -134,11 +134,11 @@ def get_device_details():
         for table in result:
             for record in table.records:
                 # Influx'ta cihazları ayırt etmek için kullandığın tag (Örn: 'device')
-                cihaz_ismi = record.values.get("device", "Ana Hat") 
+                test_cihaz_ismi = record.values.get("device", "Ana Hat") 
                 guc_degeri = record.get_value()
                 
-                cihaz_listesi.append({
-                    "cihaz": cihaz_ismi,
+                test_cihaz_listesi.append({
+                    "cihaz": test_cihaz_ismi,
                     "tuketim": f"{round(guc_degeri, 1)}W",
                     "saatlik_maliyet": f"{round((guc_degeri / 1000) * 2.59, 2)} TL",
                     "durum": "Aktif" if guc_degeri > 5 else "Kapalı"
