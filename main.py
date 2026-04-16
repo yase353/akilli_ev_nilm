@@ -5,11 +5,10 @@ import uvicorn
 from datetime import datetime
 
 # ==========================================
-# 1. API BAŞLATMA VE CORS AYARLARI
+# 1. API BAŞLATMA VE AYARLAR
 # ==========================================
-app = FastAPI(title="Akıllı Ev NILM Gelişmiş Arka Uç")
+app = FastAPI(title="Akıllı Ev NILM - Gelişmiş Arka Uç")
 
-# CORS ayarları: Flutter Web ve Dış dünyadan erişim için kritik
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,16 +17,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ngrok tarayıcı uyarısını atlatmak için otomatik header ekleyici
+# Ngrok/Render tarayıcı uyarısını atlatmak için
 @app.middleware("http")
 async def add_ngrok_bypass_header(request, call_next):
     response = await call_next(request)
     response.headers["ngrok-skip-browser-warning"] = "true"
     return response
 
-# ==========================================
-# 2. INFLUXDB BAĞLANTI AYARLARI
-# ==========================================
 INFLUX_URL = "https://eu-central-1-1.aws.cloud2.influxdata.com"
 INFLUX_TOKEN = "Itz6VHbsOtjsf1sBlQTgecv33SvF84M1rbukAO05dnAgVA9FFW6KF9tXsGHtB9WCUGx-s78LACnQ8ev7GyefMQ=="
 INFLUX_ORG = "2a22ab52153e142d"
@@ -37,56 +33,96 @@ def get_influx_client():
     return InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
 
 # ==========================================
-# 3. ENDPOINT'LER (VERİ KAPILARI)
+# 2. CİHAZ LİSTESİ (Tablo İçin)
 # ==========================================
-
-@app.get("/ev-durumu")
-def get_home_status():
-    """Ana sayfa kartları için InfluxDB'den anlık veri çeker"""
+@app.get("/cihaz-detaylari")
+def get_device_details():
     client = get_influx_client()
     query_api = client.query_api()
 
+    # Sabit Şablon: Veri olmasa bile 3 cihaz gözüksün
+    cihaz_sonuclari = {
+        "Ana Hat (ESP32)": {"cihaz": "Ana Hat (ESP32)", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
+        "Akıllı Priz - Buzdolabı": {"cihaz": "Akıllı Priz - Buzdolabı", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
+        "Akıllı Priz - Seyyar": {"cihaz": "Akıllı Priz - Seyyar", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"}
+    }
+
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -5m)
+        |> range(start: -1h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
-        |> filter(fn: (r) => r["_field"] == "guc" or r["_field"] == "cos_phi")
+        |> filter(fn: (r) => r["_field"] == "guc")
         |> last()
     '''
     
     try:
         result = query_api.query(org=INFLUX_ORG, query=query)
-        guc_degeri = 0.0
-        cos_phi_degeri = 1.0 
-
         for table in result:
             for record in table.records:
-                if record.get_field() == "guc":
-                    guc_degeri = record.get_value()
-                elif record.get_field() == "cos_phi":
-                    cos_phi_degeri = record.get_value()
+                name = record.values.get("device", "Bilinmeyen").lower()
+                watt = record.get_value()
+                
+                # Eşleştirme Mantığı
+                key = "Akıllı Priz - Seyyar"
+                if "ana" in name or "esp" in name: key = "Ana Hat (ESP32)"
+                elif "buz" in name: key = "Akıllı Priz - Buzdolabı"
 
-        # Basit fatura hesabı (Birim fiyat: 2.59 TL)
-        elektrik_birim_fiyat = 2.59 
-        tahmini_fatura = (guc_degeri / 1000) * 24 * 30 * elektrik_birim_fiyat
-
-        return {
-            "durum": "Başarılı",
-            "anlik_guc_watt": round(guc_degeri, 2),
-            "cos_phi": round(cos_phi_degeri, 2),
-            "tahmini_fatura_tl": round(tahmini_fatura, 2)
-        }
-    except Exception as e:
-        return {"durum": "Hata", "mesaj": str(e)}
+                cihaz_sonuclari[key].update({
+                    "tuketim": f"{round(watt, 1)}W",
+                    "saatlik_maliyet": f"{round((watt/1000) * 2.59, 2)} TL",
+                    "durum": "Aktif" if watt > 2 else "Beklemede"
+                })
+        return list(cihaz_sonuclari.values())
+    except:
+        return list(cihaz_sonuclari.values())
     finally:
         client.close()
 
-@app.get("/enerji-gecmisi")
-def get_energy_history():
-    """Grafik için son 1 saatlik güç verisi"""
+# ==========================================
+# 3. FATURA TAHMİNİ VE ANALİZ (Yeni!)
+# ==========================================
+@app.get("/ev-analiz")
+def get_ev_analiz():
     client = get_influx_client()
     query_api = client.query_api()
 
+    # Son 24 saatlik ortalama güç tüketimi
+    query = f'''
+        from(bucket: "{INFLUX_BUCKET}")
+        |> range(start: -24h)
+        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+        |> filter(fn: (r) => r["_field"] == "guc")
+        |> mean()
+    '''
+    
+    try:
+        result = query_api.query(org=INFLUX_ORG, query=query)
+        toplam_watt = 0.0
+        for table in result:
+            for record in table.records:
+                toplam_watt += record.get_value()
+
+        # Aylık Hesap: (Ortalama Watt * 24 Saat * 30 Gün) / 1000 * 2.59 TL
+        aylik_kwh = (toplam_watt * 24 * 30) / 1000
+        tahmini_fatura = aylik_kwh * 2.59
+
+        return {
+            "tahmini_fatura": f"{round(tahmini_fatura, 2)} TL",
+            "aylik_tuketim_kwh": f"{round(aylik_kwh, 1)} kWh",
+            "anlik_toplam_watt": f"{round(toplam_watt, 1)} W"
+        }
+    except:
+        return {"tahmini_fatura": "Hesaplanıyor...", "aylik_tuketim_kwh": "0", "anlik_toplam_watt": "0"}
+    finally:
+        client.close()
+
+# ==========================================
+# 4. ENERJİ GEÇMİŞİ (Grafik İçin - Eski Kodu Koruduk)
+# ==========================================
+@app.get("/enerji-gecmisi")
+def get_energy_history():
+    client = get_influx_client()
+    query_api = client.query_api()
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -1h)
@@ -94,80 +130,14 @@ def get_energy_history():
         |> filter(fn: (r) => r["_field"] == "guc")
         |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
     '''
-    
     try:
         result = query_api.query(org=INFLUX_ORG, query=query)
-        gecmis_liste = []
-
-        for table in result:
-            for record in table.records:
-                gecmis_liste.append({
-                    "zaman": record.get_time().strftime("%H:%M"),
-                    "deger": round(record.get_value(), 2)
-                })
-        
-        return gecmis_liste
-    except Exception as e:
+        return [{"zaman": r.get_time().strftime("%H:%M"), "deger": round(r.get_value(), 2)} 
+                for t in result for r in t.records]
+    except:
         return []
     finally:
         client.close()
 
-@app.get("/cihaz-detaylari")
-def get_device_details():
-    client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
-    query_api = client.query_api()
-
-    # Son 1 saatteki tüm cihazların en son verisini çeken sorgu
-    query = f'''
-        from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -1h)
-        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
-        |> filter(fn: (r) => r["_field"] == "guc")
-        |> last()
-    '''
-    
-    try:
-        result = query_api.query(org=INFLUX_ORG, query=query)
-        cihaz_haritasi = {}
-
-        for table in result:
-            for record in table.records:
-                # Influx'taki etiket ismini kontrol et (device, tag_device veya sensor_id olabilir)
-                # Senin Influx yapına göre burayı 'device' olarak varsayıyorum
-                raw_name = record.values.get("device", "Bilinmeyen")
-                watt = record.get_value()
-
-                # İsimleri senin istediğin jüri formatına çevirelim
-                if "ana" in raw_name.lower() or "esp" in raw_name.lower():
-                    display_name = "Ana Hat (ESP32)"
-                elif "buz" in raw_name.lower() or "priz1" in raw_name.lower():
-                    display_name = "Akıllı Priz - Buzdolabı"
-                else:
-                    display_name = "Akıllı Priz - Seyyar "
-
-                cihaz_haritasi[display_name] = {
-                    "cihaz": display_name,
-                    "tuketim": f"{round(watt, 1)}W",
-                    "saatlik_maliyet": f"{round((watt/1000) * 2.59, 2)} TL",
-                    "durum": "Aktif" if watt > 2 else "Beklemede"
-                }
-
-        # Haritayı listeye çeviriyoruz
-        final_liste = list(cihaz_haritasi.values())
-
-        if not final_liste:
-            return [{"cihaz": "Veri Bekleniyor...", "tuketim": "0W", "saatlik_maliyet": "0 TL", "durum": "-"}]
-            
-        return final_liste
-
-    except Exception as e:
-        return [{"cihaz": "Sistem Hatası", "tuketim": str(e)[:30], "saatlik_maliyet": "-", "durum": "!"}]
-    finally:
-        client.close()
-
-# ==========================================
-# 4. ÇALIŞTIRMA
-# ==========================================
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
-    
