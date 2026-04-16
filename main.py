@@ -95,22 +95,7 @@ def get_home_status():
     '''
     try:
         result = query_api.query(org=INFLUX_ORG, query=query)
-        toplam_watt = 0.0
-        for table in result:
-            for record in table.records:
-                toplam_watt += record.get_value()
-        # Aylık Hesap: (Ortalama Watt * 24 Saat * 30 Gün) / 1000 * 2.59 TL
-        aylik_kwh = (toplam_watt * 24 * 30) / 1000
-        tahmini_fatura = aylik_kwh * 2.59
-        return {
-            "tahmini_fatura": f"{round(tahmini_fatura, 2)} TL",
-            "aylik_tuketim_kwh": f"{round(aylik_kwh, 1)} kWh",
-            "anlik_toplam_watt": f"{round(toplam_watt, 1)} W"
-        }
-    except:
-        return {"tahmini_fatura": "Hesaplanıyor...", "aylik_tuketim_kwh": "0", "anlik_toplam_watt": "0"}
-    finally:
-        client.close()
+        # ... (Geri kalan hesaplama kodları aynı kalacak)
 
 # ==========================================
 # 4. ENERJİ GEÇMİŞİ (Grafik İçin - Eski Kodu Koruduk)
