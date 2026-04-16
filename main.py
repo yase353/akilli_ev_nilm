@@ -78,35 +78,51 @@ def get_device_details():
 # ==========================================
 # 3. FATURA TAHMİNİ VE ANALİZ (Yeni!)
 # ==========================================
-@app.get("/ev-durumu")
-def get_ev_durumu():
+@app.get("/cihaz-detaylari")
+def get_device_details():
     client = get_influx_client()
     query_api = client.query_api()
-    # Son 24 saatlik ortalama güç tüketimi
+
+    # Başlangıçta her şeyi 0 ve Kapalı kabul ediyoruz
+    cihaz_sonuclari = {
+        "Ana Hat (ESP32)": {"cihaz": "Ana Hat (ESP32)", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
+        "Akıllı Priz - Buzdolabı": {"cihaz": "Buzdolabı", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
+        "Akıllı Priz - Seyyar": {"cihaz": "Seyyar Priz", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"}
+    }
+
+    # Sorgu: Her cihaz etiketi (cihaz) için SON değeri ayrı ayrı getir
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -24h)
+        |> range(start: -5m)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
-        |> mean()
+        |> last()
     '''
     
     try:
         result = query_api.query(org=INFLUX_ORG, query=query)
-        toplam_watt = 0.0
         for table in result:
             for record in table.records:
-                toplam_watt += record.get_value()
-        # Aylık Hesap: (Ortalama Watt * 24 Saat * 30 Gün) / 1000 * 2.59 TL
-        aylik_kwh = (toplam_watt * 24 * 30) / 1000
-        tahmini_fatura = aylik_kwh * 2.59
-        return {
-            "tahmini_fatura": f"{round(tahmini_fatura, 2)} TL",
-            "aylik_tuketim_kwh": f"{round(aylik_kwh, 1)} kWh",
-            "anlik_toplam_watt": f"{round(toplam_watt, 1)} W"
-        }
-    except:
-        return {"tahmini_fatura": "Hesaplanıyor...", "aylik_tuketim_kwh": "0", "anlik_toplam_watt": "0"}
+                # InfluxDB'deki 'cihaz' etiketini al (ana_sayac, utu, vb.)
+                tag_name = str(record.values.get("cihaz", "")).lower()
+                watt = float(record.get_value())
+                
+                # Sadece ilgili cihazın verisini güncelle
+                target_key = None
+                if "ana" in tag_name: target_key = "Ana Hat (ESP32)"
+                elif "buz" in tag_name or "utu" in tag_name: target_key = "Akıllı Priz - Buzdolabı"
+                elif "camasir" in tag_name or "seyyar" in tag_name: target_key = "Akıllı Priz - Seyyar"
+
+                if target_key:
+                    cihaz_sonuclari[target_key].update({
+                        "tuketim": f"{round(watt, 1)}W",
+                        "saatlik_maliyet": f"{round((watt/1000) * 2.59, 2)} TL",
+                        "durum": "Aktif" if watt > 5 else "Beklemede"
+                    })
+        
+        return list(cihaz_sonuclari.values())
+    except Exception as e:
+        return list(cihaz_sonuclari.values())
     finally:
         client.close()
 # ==========================================
