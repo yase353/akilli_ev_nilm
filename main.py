@@ -64,7 +64,7 @@ def get_device_details():
                 if tag_name in cihaz_sonuclari:
                     cihaz_sonuclari[tag_name].update({
                         "tuketim": f"{round(watt, 1)}W",
-                        "saatlik_maliyet": f"{round((watt/1000) * 2.59, 2)} TL",
+                        "saatlik_maliyet": f"{round((watt/1000) * 3.5, 2)} TL",
                         "durum": "Aktif" if watt > 5 else "Beklemede"
                     })
         return list(cihaz_sonuclari.values())
@@ -99,7 +99,7 @@ def get_ev_durumu():
                 toplam_watt += record.get_value()
 
         aylik_kwh = (toplam_watt * 24 * 30) / 1000
-        tahmini_fatura = aylik_kwh * 2.59
+        tahmini_fatura = aylik_kwh * 3.5
 
         # Flutter'ın beklediği "durum": "Başarılı" alanını da ekledim.
         return {
