@@ -124,14 +124,14 @@ def get_ev_durumu():
 # 4. ENERJİ GEÇMİŞİ
 # ==========================================
 @app.get("/enerji-gecmisi")
-def get_enerji_gecmisi():
+def get_enerji_gecmisi(saat: int = 1): # Varsayılan 1 saat
     client = get_influx_client()
     query_api = client.query_api()
     
-    # Yeni sorgu: Cihazlara göre grupla ve 1'er dakikalık ortalamalar al
+    # Dinamik zaman aralığı (saat parametresine göre)
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -1h)
+        |> range(start: -{saat}h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
         |> aggregateWindow(every: 1m, fn: mean, createEmpty: true)
