@@ -76,40 +76,61 @@ def get_device_details():
 # ==========================================
 # 3. EV DURUMU (DOĞRU ENDPOINT)
 # ==========================================
-@app.get("/ev-durumu")  # İsim burasıydı, düzelttim.
+@app.get("/ev-durumu")
 def get_ev_durumu():
     client = get_influx_client()
     query_api = client.query_api()
     
-    # Fatura tahmini için son 24 saatin ortalaması
-    query = f'''
+    # 1. ADIM: Cihaz şu an açık mı? (Son 2 dakikada veri var mı kontrolü)
+    check_query = f'''
         from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -24h)
+        |> range(start: -2m)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
         |> last()
     '''
     
+    # 2. ADIM: Fatura hesabı için 24 saatlik ortalama
+    fatura_query = f'''
+        from(bucket: "{INFLUX_BUCKET}")
+        |> range(start: -24h)
+        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+        |> filter(fn: (r) => r["_field"] == "guc")
+        |> mean()
+    '''
+    
     try:
-        result = query_api.query(org=INFLUX_ORG, query=query)
-        toplam_watt = 0.0
+        # Önce cihazın aktif olup olmadığını kontrol et
+        check_result = query_api.query(org=INFLUX_ORG, query=check_query)
         
-        for table in result:
+        # Eğer son 2 dakikada hiç kayıt yoksa cihaz kapalıdır, direkt 0 döndür
+        if not check_result or len(check_result) == 0:
+            return {
+                "durum": "Başarılı",
+                "tahmini_fatura": "Cihaz Kapalı",
+                "aylik_tuketim_kwh": "0",
+                "anlik_toplam_watt": "0 W"
+            }
+
+        # Cihaz açıksa fatura hesapla
+        fatura_result = query_api.query(org=INFLUX_ORG, query=fatura_query)
+        toplam_watt = 0.0
+        for table in fatura_result:
             for record in table.records:
                 toplam_watt += record.get_value()
 
+        # Fatura hesaplama mantığı
         aylik_kwh = (toplam_watt * 24 * 30) / 1000
-        tahmini_fatura = aylik_kwh * 3.5
+        tahmini_fatura = aylik_kwh * 3.5  # kWh fiyatı 3.5 TL olarak güncelledin
 
-        # Flutter'ın beklediği "durum": "Başarılı" alanını da ekledim.
         return {
             "durum": "Başarılı",
             "tahmini_fatura": f"{round(tahmini_fatura, 2)} TL",
             "aylik_tuketim_kwh": f"{round(aylik_kwh, 1)} kWh",
             "anlik_toplam_watt": f"{round(toplam_watt, 1)} W"
         }
-    except:
-        return {"durum": "Hata", "tahmini_fatura": "0.0 TL", "aylik_tuketim_kwh": "0", "anlik_toplam_watt": "0"}
+    except Exception as e:
+        return {"durum": "Hata", "tahmini_fatura": "Hata", "aylik_tuketim_kwh": "0", "anlik_toplam_watt": "0"}
     finally:
         client.close()
 
