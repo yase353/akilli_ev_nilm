@@ -81,37 +81,41 @@ def get_ev_durumu():
     client = get_influx_client()
     query_api = client.query_api()
     
-    check_query = f'from(bucket: "{INFLUX_BUCKET}") |> range(start: -2m) |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim") |> last()'
+    # 24 saatlik ortalama güç verisi
     fatura_query = f'from(bucket: "{INFLUX_BUCKET}") |> range(start: -24h) |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim") |> mean()'
     
     try:
-        check_result = query_api.query(org=INFLUX_ORG, query=check_query)
-        
-        if not check_result or len(check_result) == 0:
-            return {
-                "durum": "Cevrimdisi",
-                "tahmini_fatura": "0.0 TL",
-                "aylik_tuketim_kwh": "0",
-                "anlik_toplam_watt": "0 W"
-            }
-
         fatura_result = query_api.query(org=INFLUX_ORG, query=fatura_query)
         toplam_watt = 0.0
         for table in fatura_result:
             for record in table.records:
                 toplam_watt += record.get_value()
 
+        # 1. Aylık toplam tüketimi kWh cinsinden bul
         aylik_kwh = (toplam_watt * 24 * 30) / 1000
-        tahmini_fatura = aylik_kwh * 3.5
+        
+        # 2. KADEMELİ TARİFE AYARLARI (Nisan 2026 Tahmini)
+        kademe_siniri = 240  # Aylık düşük kademe sınırı (kWh)
+        dusuk_birim_fiyat = 2.07  # TL/kWh (Vergiler dahil düşük)
+        yuksek_birim_fiyat = 3.10  # TL/kWh (Vergiler dahil yüksek)
+
+        # 3. Hesaplama Mantığı
+        if aylik_kwh <= kademe_siniri:
+            # Tüketim sınırın altındaysa hepsini ucuzdan hesapla
+            tahmini_fatura = aylik_kwh * dusuk_birim_fiyat
+        else:
+            # Sınırı aşan kısmı bul
+            ucuz_kisim = kademe_siniri * dusuk_birim_fiyat
+            pahali_kisim = (aylik_kwh - kademe_siniri) * yuksek_birim_fiyat
+            tahmini_fatura = ucuz_kisim + pahali_kisim
 
         return {
-            "durum": "Basarili",
+            "durum": "Basarili" if toplam_watt > 0 else "Cevrimdisi",
             "tahmini_fatura": f"{round(tahmini_fatura, 2)} TL",
             "aylik_tuketim_kwh": f"{round(aylik_kwh, 1)}",
             "anlik_toplam_watt": f"{round(toplam_watt, 1)} W"
         }
     except Exception as e:
-        print(f"Hata: {e}")
         return {"durum": "Hata", "tahmini_fatura": "0.0 TL", "aylik_tuketim_kwh": "0", "anlik_toplam_watt": "0 W"}
     finally:
         client.close()
