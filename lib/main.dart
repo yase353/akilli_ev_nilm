@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async'; // Zamanlayıcı için gerekli
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:fl_chart/fl_chart.dart';
@@ -37,11 +38,12 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
   String fatura = "0.0 TL";
   String aylikKwh = "0 kWh";
   bool yukleniyor = false;
+  Timer? _timer; // Canlı akış için zamanlayıcı
 
   final String apiBaseUrl = "https://akilli-ev-nilm.onrender.com";
 
   Future<void> verileriGetir() async {
-    setState(() => yukleniyor = true);
+    // Otomatik yenilemede kullanıcıyı rahatsız etmemek için sadece ilk yüklemede veya manuel yenilemede loading gösteriyoruz
     try {
       final response = await http.get(
         Uri.parse('$apiBaseUrl/ev-durumu'),
@@ -49,7 +51,7 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
           "ngrok-skip-browser-warning": "true",
           "Accept": "application/json"
         },
-      ).timeout(const Duration(seconds: 15));
+      ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final veri = jsonDecode(response.body);
@@ -65,14 +67,12 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
             aylikKwh = "0 kWh";
             durum = "Cihaz Çevrimdışı";
           }
-          yukleniyor = false;
         });
       }
     } catch (e) {
-      setState(() {
-        durum = "Bağlantı Hatası!";
-        yukleniyor = false;
-      });
+      if (mounted) {
+        setState(() => durum = "Bağlantı Hatası!");
+      }
     }
   }
 
@@ -80,6 +80,16 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
   void initState() {
     super.initState();
     verileriGetir();
+    // CANLI AKIŞ: Her 5 saniyede bir verileri güncelle
+    _timer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      verileriGetir();
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel(); // Sayfa kapanınca zamanlayıcıyı durdur
+    super.dispose();
   }
 
   @override
@@ -118,8 +128,8 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
                   child: ListTile(
                     contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
                     leading: const Icon(Icons.electric_bolt, color: Colors.orange, size: 50),
-                    title: const Text("Tüketim Analizi", style: TextStyle(fontSize: 18)),
-                    subtitle: Text("$anlikGuc\n$aylikKwh", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+                    title: const Text("Tüketim Analizi (Grafik)", style: TextStyle(fontSize: 18)),
+                    subtitle: Text("Anlık: $anlikGuc\nToplam: $aylikKwh", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
                     trailing: const Icon(Icons.show_chart, size: 30),
                   ),
                 ),
@@ -152,7 +162,7 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
                         children: [
                           Icon(Icons.account_balance_wallet, color: Colors.green),
                           SizedBox(width: 10),
-                          Text("Tahmini Aylık Fatura", style: TextStyle(fontSize: 16)),
+                          const Text("Tahmini Aylık Fatura", style: TextStyle(fontSize: 16)),
                         ],
                       ),
                       const SizedBox(height: 10),
@@ -164,10 +174,6 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
             ],
           ),
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: verileriGetir,
-        child: yukleniyor ? const CircularProgressIndicator() : const Icon(Icons.refresh),
       ),
     );
   }
@@ -228,6 +234,7 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
             double e = (v['esp32_ana'] ?? 0.0).toDouble();
             double s = (v['seyyar_priz'] ?? 0.0).toDouble();
 
+            // Yığılmış (Stacked) grafik hesaplaması
             spotsBuz.add(FlSpot(x, b));
             spotsEsp.add(FlSpot(x, b + e));
             spotsSeyyar.add(FlSpot(x, b + e + s));
@@ -251,24 +258,24 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
                   padding: const EdgeInsets.only(top: 20, right: 30, left: 10, bottom: 20),
                   child: LineChart(
                     LineChartData(
-                      gridData: const FlGridData(show: true, drawVerticalLine: false),
+                      gridData: FlGridData(show: true, drawVerticalLine: false, horizontalInterval: 200),
                       titlesData: FlTitlesData(
                         show: true,
                         rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                         topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                         bottomTitles: AxisTitles(
-                          axisNameWidget: Text("Son $secilenSaat Saat (Ölçüm Sırası)"),
-                          sideTitles: SideTitles(showTitles: true, interval: 10),
+                          axisNameWidget: Text("Son $secilenSaat Saatlik Veri Akışı"),
+                          sideTitles: SideTitles(showTitles: true, interval: 10, reservedSize: 30),
                         ),
                         leftTitles: AxisTitles(
-                          axisNameWidget: const Text("Watt"),
-                          sideTitles: SideTitles(showTitles: true, reservedSize: 40),
+                          axisNameWidget: const Text("Güç (Watt)"),
+                          sideTitles: SideTitles(showTitles: true, reservedSize: 45),
                         ),
                       ),
                       lineBarsData: [
-                        _bar(spotsSeyyar, Colors.purple),
-                        _bar(spotsEsp, Colors.red),
-                        _bar(spotsBuz, Colors.blue),
+                        _bar(spotsSeyyar, Colors.purple), // En üst (Toplam)
+                        _bar(spotsEsp, Colors.red),     // Orta
+                        _bar(spotsBuz, Colors.blue),     // En alt
                       ],
                     ),
                   ),
@@ -282,11 +289,15 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
   }
 
   LineChartBarData _bar(List<FlSpot> s, Color c) => LineChartBarData(
-    spots: s, isCurved: true, color: c, barWidth: 2, dotData: const FlDotData(show: false),
+    spots: s,
+    isCurved: true,
+    color: c,
+    barWidth: 3,
+    dotData: const FlDotData(show: false),
     belowBarData: BarAreaData(show: true, color: c.withOpacity(0.4)),
   );
 
-  Widget _lejant(String t, Color c) => Row(children: [Container(width: 12, height: 12, color: c), const SizedBox(width: 4), Text(t)]);
+  Widget _lejant(String t, Color c) => Row(children: [Container(width: 12, height: 12, color: c), const SizedBox(width: 4), Text(t, style: const TextStyle(fontWeight: FontWeight.bold))]);
 }
 
 // --- TABLO SAYFASI ---
@@ -311,7 +322,12 @@ class CihazTabloSayfasi extends StatelessWidget {
 
           return SingleChildScrollView(
             child: DataTable(
-              columns: const [DataColumn(label: Text('Cihaz')), DataColumn(label: Text('Güç (W)')), DataColumn(label: Text('TL/Saat'))],
+              headingRowColor: MaterialStateProperty.all(Colors.grey.shade200),
+              columns: const [
+                DataColumn(label: Text('Cihaz')),
+                DataColumn(label: Text('Güç (W)')),
+                DataColumn(label: Text('TL/Saat'))
+              ],
               rows: snapshot.data!.map((item) => DataRow(cells: [
                 DataCell(Text(item['cihaz'].toString())),
                 DataCell(Text(item['tuketim'].toString())),
