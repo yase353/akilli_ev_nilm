@@ -192,6 +192,7 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
 
 // --- GRAFİK SAYFASI ---
 // --- GRAFİK SAYFASI (YENİLENMİŞ) ---
+// --- GRAFİK SAYFASI (YENİLENMİŞ - YIĞILMIŞ ALAN) ---
 class GrafikSayfasi extends StatelessWidget {
   final String apiUrl;
   const GrafikSayfasi({super.key, required this.apiUrl});
@@ -213,49 +214,60 @@ class GrafikSayfasi extends StatelessWidget {
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
           if (snapshot.hasError || !snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text("Veri bulunamadı."));
+            return const Center(child: Text("Veri bulunamadı veya donanım etiketleri eşleşmiyor."));
           }
 
-          List<FlSpot> spots = [];
+          List<FlSpot> spotsBuzdolabi = [];
+          List<FlSpot> spotsEsp32 = [];
+          List<FlSpot> spotsSeyyar = [];
+
           for (int i = 0; i < snapshot.data!.length; i++) {
-            double deger = (snapshot.data![i]['deger'] ?? 0.0).toDouble();
-            spots.add(FlSpot(i.toDouble(), deger));
+            final veri = snapshot.data![i];
+            double x = i.toDouble();
+            
+            // Verileri al (null ise 0.0 yap)
+            double wBuz = (veri['buzdolabi'] ?? 0.0).toDouble();
+            double wEsp = (veri['esp32_ana'] ?? 0.0).toDouble();
+            double wSey = (veri['seyyar_priz'] ?? 0.0).toDouble();
+
+            // Yığılmış Grafik Mantığı (Üst üste ekle)
+            // 1. Katman: Buzdolabı
+            spotsBuzdolabi.add(FlSpot(x, wBuz));
+            // 2. Katman: Buzdolabı + ESP32
+            spotsEsp32.add(FlSpot(x, wBuz + wEsp));
+            // 3. Katman: Buzdolabı + ESP32 + Seyyar (Toplam)
+            spotsSeyyar.add(FlSpot(x, wBuz + wEsp + wSey));
           }
 
           return Column(
             children: [
-              const Padding(
-                padding: EdgeInsets.all(16.0),
-                child: Text(
-                  "Son 1 Saatlik Güç Değişimi (Watt)",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.orange),
+              // RENK REFERANS PANELDİ (Lejant)
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _lejantOgesi("Buzdolabı", Colors.blue),
+                    _lejantOgesi("ESP32 Ana", Colors.red),
+                    _lejantOgesi("Seyyar Priz", Colors.purple),
+                  ],
                 ),
               ),
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.only(top: 20, right: 30, left: 10, bottom: 20),
+                  padding: const EdgeInsets.only(top: 10, right: 30, left: 10, bottom: 20),
                   child: LineChart(
                     LineChartData(
                       gridData: FlGridData(
                         show: true,
-                        drawVerticalLine: true,
-                        horizontalInterval: 200, // Her 200W'da bir çizgi
-                        getDrawingHorizontalLine: (value) => FlLine(color: Colors.grey.withOpacity(0.2), strokeWidth: 1),
-                        getDrawingVerticalLine: (value) => FlLine(color: Colors.grey.withOpacity(0.2), strokeWidth: 1),
+                        horizontalInterval: 200,
+                        getDrawingHorizontalLine: (value) => FlLine(color: Colors.grey.withOpacity(0.1), strokeWidth: 1),
+                        getDrawingVerticalLine: (value) => FlLine(color: Colors.grey.withOpacity(0.1), strokeWidth: 1),
                       ),
                       titlesData: FlTitlesData(
                         show: true,
                         rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                         topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        bottomTitles: AxisTitles(
-                          axisNameWidget: const Text("Ölçüm Zamanı (Sıra)"),
-                          sideTitles: SideTitles(
-                            showTitles: true,
-                            reservedSize: 30,
-                            interval: 10, // Her 10 ölçümde bir sayı yaz
-                            getTitlesWidget: (value, meta) => Text(value.toInt().toString(), style: const TextStyle(fontSize: 10)),
-                          ),
-                        ),
                         leftTitles: AxisTitles(
                           axisNameWidget: const Text("Güç (W)"),
                           sideTitles: SideTitles(
@@ -264,21 +276,25 @@ class GrafikSayfasi extends StatelessWidget {
                             getTitlesWidget: (value, meta) => Text("${value.toInt()}W", style: const TextStyle(fontSize: 10)),
                           ),
                         ),
-                      ),
-                      borderData: FlBorderData(show: true, border: Border.all(color: Colors.grey.shade300)),
-                      lineBarsData: [
-                        LineChartBarData(
-                          spots: spots, 
-                          isCurved: true, 
-                          color: Colors.orange, 
-                          barWidth: 4, 
-                          isStrokeCapRound: true,
-                          dotData: const FlDotData(show: false),
-                          belowBarData: BarAreaData(
-                            show: true, 
-                            color: Colors.orange.withOpacity(0.1)
+                        bottomTitles: AxisTitles(
+                          axisNameWidget: const Text("Zaman (Son 1 Saat / dk)"),
+                          sideTitles: SideTitles(
+                            showTitles: true,
+                            interval: 10,
+                            getTitlesWidget: (value, meta) => Text(value.toInt().toString(), style: const TextStyle(fontSize: 10)),
                           ),
-                        )
+                        ),
+                      ),
+                      borderData: FlBorderData(show: true, border: Border.all(color: Colors.grey.shade200)),
+                      
+                      // ÇİZGİLERİN TANIMLANDIĞI YER
+                      lineBarsData: [
+                        // En Üst Katman (Toplam): Seyyar Priz (Mor)
+                        _cihazCizgisiOlustur(spotsSeyyar, Colors.purple),
+                        // Orta Katman: ESP32 Ana (Kırmızı)
+                        _cihazCizgisiOlustur(spotsEsp32, Colors.red),
+                        // En Alt Katman: Buzdolabı (Mavi)
+                        _cihazCizgisiOlustur(spotsBuzdolabi, Colors.blue),
                       ],
                     ),
                   ),
@@ -288,6 +304,32 @@ class GrafikSayfasi extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+
+  // Yardımcı Fonksiyon: Cihaz Çizgisi ve Alanını Oluşturur
+  LineChartBarData _cihazCizgisiOlustur(List<FlSpot> spots, Color color) {
+    return LineChartBarData(
+      spots: spots,
+      isCurved: true,
+      color: color,
+      barWidth: 2,
+      dotData: const FlDotData(show: false),
+      belowBarData: BarAreaData(
+        show: true, 
+        color: color.withOpacity(0.5), // Alanı renklendir
+      ),
+    );
+  }
+
+  // Yardımcı Fonksiyon: Lejant (Renk Referansı) Öğesi
+  Widget _lejantOgesi(String isim, Color renk) {
+    return Row(
+      children: [
+        Container(width: 12, height: 12, color: renk),
+        const SizedBox(width: 5),
+        Text(isim, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+      ],
     );
   }
 }
