@@ -124,21 +124,59 @@ def get_ev_durumu():
 # 4. ENERJİ GEÇMİŞİ
 # ==========================================
 @app.get("/enerji-gecmisi")
-def get_energy_history():
+def get_enerji_gecmisi():
     client = get_influx_client()
     query_api = client.query_api()
+    
+    # Yeni sorgu: Cihazlara göre grupla ve 1'er dakikalık ortalamalar al
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -1h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
-        |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
+        |> aggregateWindow(every: 1m, fn: mean, createEmpty: true)
+        |> group(columns: ["device_id"])
     '''
+    
     try:
         result = query_api.query(org=INFLUX_ORG, query=query)
-        return [{"zaman": r.get_time().strftime("%H:%M"), "deger": round(r.get_value(), 2)} 
-                for t in result for r in t.records]
-    except:
+        
+        # Veriyi zaman damgasına göre organize et
+        # Yapı: { timestamp: { 'buzdolabi': 100, 'esp32': 50, ... } }
+        time_map = {}
+        
+        for table in result:
+            # InfluxDB'den device_id etiketini al
+            device_id = "bilinmeyen"
+            if table.records:
+                device_id = table.records[0].values.get("device_id", "bilinmeyen")
+            
+            for record in table.records:
+                time = record.get_time().isoformat()
+                value = record.get_value() or 0.0 # null verileri 0 yap
+                
+                if time not in time_map:
+                    time_map[time] = {}
+                
+                time_map[time][device_id] = round(value, 1)
+
+        # JSON formatına dönüştür (List of dicts)
+        final_list = []
+        for time, devices in time_map.items():
+            # Eğer o dakika için bir cihazın verisi yoksa 0.0 ekle
+            final_list.append({
+                "zaman": time,
+                "buzdolabi": devices.get("buzdolabi", 0.0), # ESP32'de bu etiketleri kullanmalısın
+                "esp32_ana": devices.get("esp32_ana", 0.0),
+                "seyyar_priz": devices.get("seyyar_priz", 0.0)
+            })
+            
+        # Zaman sırasına göre diz
+        final_list.sort(key=lambda x: x["zaman"])
+        return final_list
+        
+    except Exception as e:
+        print(f"Grafik Hatası: {e}")
         return []
     finally:
         client.close()
