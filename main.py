@@ -87,7 +87,7 @@ def get_ev_durumu():
         |> range(start: -24h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
-        |> mean()
+        |> last()
     '''
     
     try:
