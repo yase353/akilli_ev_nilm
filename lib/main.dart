@@ -15,10 +15,7 @@ class AkilliEvApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Akıllı Ev NILM',
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: Colors.blueAccent,
-      ),
+      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.blueAccent),
       home: const EvDurumuSayfasi(),
     );
   }
@@ -26,46 +23,41 @@ class AkilliEvApp extends StatelessWidget {
 
 class EvDurumuSayfasi extends StatefulWidget {
   const EvDurumuSayfasi({super.key});
-
   @override
   State<EvDurumuSayfasi> createState() => _EvDurumuSayfasiState();
 }
 
 class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
   String durum = "Veri bekleniyor...";
-  double anlikGuc = 0.0;
-  double cosPhi = 1.0;
-  double fatura = 0.0;
+  String anlikGuc = "0 W";
+  String fatura = "0 TL";
+  String aylikKwh = "0 kWh";
   bool yukleniyor = false;
 
   final String apiBaseUrl = "https://akilli-ev-nilm.onrender.com"; 
 
   Future<void> verileriGetir() async {
-    setState(() => yukleniyor = true);
-    try {
-      // 🛡️ NGROK BYPASS HEADER EKLENDİ
-      final response = await http.get(
-        Uri.parse('$apiBaseUrl/ev-durumu'),
-        headers: {"ngrok-skip-browser-warning": "true"},
-      );
-      
-      if (response.statusCode == 200) {
-        final veri = jsonDecode(response.body);
-        setState(() {
-          durum = veri['durum'];
-          anlikGuc = (veri['anlik_guc_watt'] ?? 0.0).toDouble();
-          cosPhi = (veri['cos_phi'] ?? 1.0).toDouble();
-          fatura = (veri['tahmini_fatura_tl'] ?? 0.0).toDouble();
-          yukleniyor = false;
-        });
-      }
-    } catch (e) {
+  try {
+    final response = await http.get(Uri.parse('$apiBaseUrl/ev-durumu'));
+    if (response.statusCode == 200) {
+      final veri = jsonDecode(response.body);
       setState(() {
-        durum = "Bağlantı Hatası! Ngrok kapalı olabilir.";
-        yukleniyor = false;
+        anlikGuc = veri['anlik_toplam_watt'] ?? "0 W";
+        fatura = veri['tahmini_fatura'] ?? "0.0 TL";
+        aylikKwh = (veri['aylik_tuketim_kwh'] ?? "0") + " kWh";
+        
+        // Python'dan gelen duruma göre başlığı güncelle
+        if (veri['durum'] == "Basarili") {
+          durum = "Başarılı";
+        } else {
+          durum = "Cihaz Çevrimdışı";
+        }
       });
     }
+  } catch (e) {
+    print("Hata: $e");
   }
+}
 
   @override
   void initState() {
@@ -77,76 +69,77 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("Ev Enerji Takibi"), centerTitle: true),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: yukleniyor
-            ? const Center(child: CircularProgressIndicator())
-            : Column(
-                children: [
-                  Card(
-                    child: ListTile(
-                      leading: Icon(durum == "Başarılı" ? Icons.check_circle : Icons.error, 
-                                    color: durum == "Başarılı" ? Colors.green : Colors.red),
-                      title: const Text("Sistem Durumu"),
-                      subtitle: Text(durum),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  InkWell(
-                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => GrafikSayfasi(apiUrl: apiBaseUrl))),
-                    child: Card(
-                      color: Colors.orange.shade50,
-                      child: ListTile(
-                        leading: const Icon(Icons.electric_bolt, color: Colors.orange, size: 40),
-                        title: const Text("Anlık Tüketim (Grafik)"),
-                        subtitle: Text("$anlikGuc Watt\nCos φ: $cosPhi"),
-                        trailing: const Icon(Icons.chevron_right),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  InkWell(
-                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => CihazTabloSayfasi(apiUrl: apiBaseUrl))),
-                    child: Card(
-                      color: Colors.blue.shade50,
-                      child: const ListTile(
-                        leading: Icon(Icons.devices_other, color: Colors.blue, size: 40),
-                        title: Text("Çalışan Cihaz Detayları"),
-                        subtitle: Text("Tabloyu görmek için tıklayın"),
-                        trailing: Icon(Icons.chevron_right),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Card(
-                    color: Colors.green.shade50,
-                    child: ListTile(
-                      leading: const Icon(Icons.account_balance_wallet, color: Colors.green, size: 40),
-                      title: const Text("Tahmini Aylık Fatura"),
-                      subtitle: Text("$fatura TL", style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                ],
+      body: RefreshIndicator(
+        onRefresh: verileriGetir,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            children: [
+              Card(
+                child: ListTile(
+                  leading: Icon(durum == "Başarılı" ? Icons.check_circle : Icons.error, color: durum == "Başarılı" ? Colors.green : Colors.red),
+                  title: const Text("Sistem Durumu"),
+                  subtitle: Text(durum),
+                ),
               ),
+              const SizedBox(height: 10),
+              // GRAFİK KARTI
+              InkWell(
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => GrafikSayfasi(apiUrl: apiBaseUrl))),
+                child: Card(
+                  color: Colors.orange.shade50,
+                  child: ListTile(
+                    leading: const Icon(Icons.electric_bolt, color: Colors.orange, size: 40),
+                    title: const Text("Anlık Tüketim (Grafik)"),
+                    subtitle: Text("$anlikGuc\nAnaliz: $aylikKwh"),
+                    trailing: const Icon(Icons.chevron_right),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              // CİHAZ TABLOSU KARTI
+              InkWell(
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => CihazTabloSayfasi(apiUrl: apiBaseUrl))),
+                child: Card(
+                  color: Colors.blue.shade50,
+                  child: const ListTile(
+                    leading: Icon(Icons.devices_other, color: Colors.blue, size: 40),
+                    title: Text("Cihaz Detay Tablosu"),
+                    subtitle: Text("Priz bazlı tüketimler"),
+                    trailing: Icon(Icons.chevron_right),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              // FATURA KARTI
+              Card(
+                color: Colors.green.shade50,
+                child: ListTile(
+                  leading: const Icon(Icons.account_balance_wallet, color: Colors.green, size: 40),
+                  title: const Text("Tahmini Aylık Fatura"),
+                  subtitle: Text(fatura, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.green)),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: verileriGetir,
-        child: const Icon(Icons.refresh),
+        child: yukleniyor ? const CircularProgressIndicator() : const Icon(Icons.refresh),
       ),
     );
   }
 }
 
+// --- GRAFİK SAYFASI ---
 class GrafikSayfasi extends StatelessWidget {
   final String apiUrl;
   const GrafikSayfasi({super.key, required this.apiUrl});
 
   Future<List<dynamic>> gecmisVeriGetir() async {
-    // 🛡️ NGROK BYPASS HEADER EKLENDİ
-    final response = await http.get(
-      Uri.parse('$apiUrl/enerji-gecmisi'),
-      headers: {"ngrok-skip-browser-warning": "true"},
-    );
+    final response = await http.get(Uri.parse('$apiUrl/enerji-gecmisi'), headers: {"ngrok-skip-browser-warning": "true"});
     return jsonDecode(response.body);
   }
 
@@ -160,18 +153,11 @@ class GrafikSayfasi extends StatelessWidget {
           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
           List<FlSpot> spots = [];
           for (int i = 0; i < snapshot.data!.length; i++) {
-            spots.add(FlSpot(i.toDouble(), snapshot.data![i]['deger'].toDouble()));
+            spots.add(FlSpot(i.toDouble(), (snapshot.data![i]['deger'] ?? 0.0).toDouble()));
           }
           return Padding(
             padding: const EdgeInsets.all(20),
-            child: LineChart(
-              LineChartData(
-                lineBarsData: [
-                  LineChartBarData(spots: spots, isCurved: true, color: Colors.orange, barWidth: 4),
-                ],
-                titlesData: const FlTitlesData(show: true),
-              ),
-            ),
+            child: LineChart(LineChartData(lineBarsData: [LineChartBarData(spots: spots, isCurved: true, color: Colors.orange, barWidth: 4)])),
           );
         },
       ),
@@ -179,41 +165,32 @@ class GrafikSayfasi extends StatelessWidget {
   }
 }
 
+// --- TABLO SAYFASI ---
 class CihazTabloSayfasi extends StatelessWidget {
   final String apiUrl;
   const CihazTabloSayfasi({super.key, required this.apiUrl});
 
   Future<List<dynamic>> cihazVeriGetir() async {
-    // 🛡️ NGROK BYPASS HEADER EKLENDİ
-    final response = await http.get(
-      Uri.parse('$apiUrl/cihaz-detaylari'),
-      headers: {"ngrok-skip-browser-warning": "true"},
-    );
+    final response = await http.get(Uri.parse('$apiUrl/cihaz-detaylari'), headers: {"ngrok-skip-browser-warning": "true"});
     return jsonDecode(response.body);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Cihaz Detay Tablosu")),
+      appBar: AppBar(title: const Text("Cihaz Analizi")),
       body: FutureBuilder<List<dynamic>>(
         future: cihazVeriGetir(),
         builder: (context, snapshot) {
           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
           return SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
             child: DataTable(
-              columns: const [
-                DataColumn(label: Text('Cihaz')),
-                DataColumn(label: Text('Tüketim')),
-                DataColumn(label: Text('Maliyet')),
-                DataColumn(label: Text('Durum')),
-              ],
+              columns: const [DataColumn(label: Text('Cihaz')), DataColumn(label: Text('Güç')), DataColumn(label: Text('Maliyet'))],
               rows: snapshot.data!.map((item) => DataRow(cells: [
                 DataCell(Text(item['cihaz'].toString())),
                 DataCell(Text(item['tuketim'].toString())),
-                DataCell(Text(item['maliyet'].toString())),
-                DataCell(Text(item['durum'].toString())),
+                // PYTHON KODUNDAKİ 'saatlik_maliyet' İLE EŞLEŞTİ:
+                DataCell(Text(item['saatlik_maliyet'].toString())),
               ])).toList(),
             ),
           );
