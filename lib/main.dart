@@ -191,6 +191,7 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
 }
 
 // --- GRAFİK SAYFASI ---
+// --- GRAFİK SAYFASI (YENİLENMİŞ) ---
 class GrafikSayfasi extends StatelessWidget {
   final String apiUrl;
   const GrafikSayfasi({super.key, required this.apiUrl});
@@ -206,13 +207,13 @@ class GrafikSayfasi extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("1 Saatlik Tüketim Grafiği")),
+      appBar: AppBar(title: const Text("Tüketim Analizi")),
       body: FutureBuilder<List<dynamic>>(
         future: gecmisVeriGetir(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
           if (snapshot.hasError || !snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text("Grafik verisi bulunamadı."));
+            return const Center(child: Text("Veri bulunamadı."));
           }
 
           List<FlSpot> spots = [];
@@ -221,25 +222,69 @@ class GrafikSayfasi extends StatelessWidget {
             spots.add(FlSpot(i.toDouble(), deger));
           }
 
-          return Padding(
-            padding: const EdgeInsets.only(top: 40, right: 20, left: 10, bottom: 20),
-            child: LineChart(
-              LineChartData(
-                gridData: const FlGridData(show: true),
-                titlesData: const FlTitlesData(show: false), // Karmaşıklığı önlemek için kapalı
-                borderData: FlBorderData(show: true),
-                lineBarsData: [
-                  LineChartBarData(
-                    spots: spots, 
-                    isCurved: true, 
-                    color: Colors.orange, 
-                    barWidth: 3, 
-                    dotData: const FlDotData(show: false),
-                    belowBarData: BarAreaData(show: true, color: Colors.orange.withOpacity(0.2)),
-                  )
-                ],
+          return Column(
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text(
+                  "Son 1 Saatlik Güç Değişimi (Watt)",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.orange),
+                ),
               ),
-            ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 20, right: 30, left: 10, bottom: 20),
+                  child: LineChart(
+                    LineChartData(
+                      gridData: FlGridData(
+                        show: true,
+                        drawVerticalLine: true,
+                        horizontalInterval: 200, // Her 200W'da bir çizgi
+                        getDrawingHorizontalLine: (value) => FlLine(color: Colors.grey.withOpacity(0.2), strokeWidth: 1),
+                        getDrawingVerticalLine: (value) => FlLine(color: Colors.grey.withOpacity(0.2), strokeWidth: 1),
+                      ),
+                      titlesData: FlTitlesData(
+                        show: true,
+                        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                        bottomTitles: AxisTitles(
+                          axisNameWidget: const Text("Ölçüm Zamanı (Sıra)"),
+                          sideTitles: SideTitles(
+                            showTitles: true,
+                            reservedSize: 30,
+                            interval: 10, // Her 10 ölçümde bir sayı yaz
+                            getTitlesWidget: (value, meta) => Text(value.toInt().toString(), style: const TextStyle(fontSize: 10)),
+                          ),
+                        ),
+                        leftTitles: AxisTitles(
+                          axisNameWidget: const Text("Güç (W)"),
+                          sideTitles: SideTitles(
+                            showTitles: true,
+                            reservedSize: 45,
+                            getTitlesWidget: (value, meta) => Text("${value.toInt()}W", style: const TextStyle(fontSize: 10)),
+                          ),
+                        ),
+                      ),
+                      borderData: FlBorderData(show: true, border: Border.all(color: Colors.grey.shade300)),
+                      lineBarsData: [
+                        LineChartBarData(
+                          spots: spots, 
+                          isCurved: true, 
+                          color: Colors.orange, 
+                          barWidth: 4, 
+                          isStrokeCapRound: true,
+                          dotData: const FlDotData(show: false),
+                          belowBarData: BarAreaData(
+                            show: true, 
+                            color: Colors.orange.withOpacity(0.1)
+                          ),
+                        )
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
           );
         },
       ),
