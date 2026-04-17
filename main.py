@@ -39,11 +39,11 @@ def get_device_details():
     client = get_influx_client()
     query_api = client.query_api()
 
-    # Varsayılan tablo yapısı (Anahtarlar Influx'taki cihaz isimlerinle aynı olmalı)
+    # Varsayılan tablo yapısı
     cihaz_sonuclari = {
-        "ana_sayac": {"cihaz": "Ana Hat (ESP32)", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
-        "utu": {"cihaz": "Akıllı Priz - Buzdolabı", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
-        "camasir_makinesi": {"cihaz": "Seyyar Priz", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"}
+        "esp32_ana": {"cihaz": "Ana Hat (ESP32)", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
+        "buzdolabi": {"cihaz": "Akıllı Priz - Buzdolabı", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
+        "seyyar_priz": {"cihaz": "Seyyar Priz", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"}
     }
 
     query = f'''
@@ -58,7 +58,7 @@ def get_device_details():
         result = query_api.query(org=INFLUX_ORG, query=query)
         for table in result:
             for record in table.records:
-                tag_name = record.values.get("cihaz", "")
+                tag_name = record.values.get("device_id", "") # device_id etiketine göre kontrol
                 watt = record.get_value()
                 
                 if tag_name in cihaz_sonuclari:
@@ -74,23 +74,19 @@ def get_device_details():
         client.close()
 
 # ==========================================
-# 3. EV DURUMU (DOĞRU ENDPOINT)
+# 3. EV DURUMU (Ana Sayfa Özet Verileri)
 # ==========================================
 @app.get("/ev-durumu")
 def get_ev_durumu():
     client = get_influx_client()
     query_api = client.query_api()
     
-    # Son 2 dakikada veri var mı?
     check_query = f'from(bucket: "{INFLUX_BUCKET}") |> range(start: -2m) |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim") |> last()'
-    
-    # 24 saatlik ortalama (Fatura için)
     fatura_query = f'from(bucket: "{INFLUX_BUCKET}") |> range(start: -24h) |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim") |> mean()'
     
     try:
         check_result = query_api.query(org=INFLUX_ORG, query=check_query)
         
-        # Eğer veri gelmiyorsa eski veride takılı kalma, 0 döndür
         if not check_result or len(check_result) == 0:
             return {
                 "durum": "Cevrimdisi",
@@ -121,14 +117,14 @@ def get_ev_durumu():
         client.close()
 
 # ==========================================
-# 4. ENERJİ GEÇMİŞİ
+# 4. ENERJİ GEÇMİŞİ (GRAFİK İÇİN)
 # ==========================================
 @app.get("/enerji-gecmisi")
-def get_enerji_gecmisi(saat: int = 1): # Varsayılan 1 saat
+def get_enerji_gecmisi(saat: int = 1): 
     client = get_influx_client()
     query_api = client.query_api()
     
-    # Dinamik zaman aralığı (saat parametresine göre)
+    # Kullanıcının seçtiği saate göre dinamik sorgu
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -{saat}h)
@@ -140,38 +136,32 @@ def get_enerji_gecmisi(saat: int = 1): # Varsayılan 1 saat
     
     try:
         result = query_api.query(org=INFLUX_ORG, query=query)
-        
-        # Veriyi zaman damgasına göre organize et
-        # Yapı: { timestamp: { 'buzdolabi': 100, 'esp32': 50, ... } }
         time_map = {}
         
         for table in result:
-            # InfluxDB'den device_id etiketini al
             device_id = "bilinmeyen"
             if table.records:
+                # Cihaz bazlı ayrıştırma için device_id etiketini okuyoruz
                 device_id = table.records[0].values.get("device_id", "bilinmeyen")
             
             for record in table.records:
                 time = record.get_time().isoformat()
-                value = record.get_value() or 0.0 # null verileri 0 yap
+                value = record.get_value() or 0.0
                 
                 if time not in time_map:
                     time_map[time] = {}
                 
                 time_map[time][device_id] = round(value, 1)
 
-        # JSON formatına dönüştür (List of dicts)
         final_list = []
         for time, devices in time_map.items():
-            # Eğer o dakika için bir cihazın verisi yoksa 0.0 ekle
             final_list.append({
                 "zaman": time,
-                "buzdolabi": devices.get("buzdolabi", 0.0), # ESP32'de bu etiketleri kullanmalısın
+                "buzdolabi": devices.get("buzdolabi", 0.0),
                 "esp32_ana": devices.get("esp32_ana", 0.0),
                 "seyyar_priz": devices.get("seyyar_priz", 0.0)
             })
             
-        # Zaman sırasına göre diz
         final_list.sort(key=lambda x: x["zaman"])
         return final_list
         
