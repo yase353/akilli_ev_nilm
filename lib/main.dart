@@ -15,7 +15,11 @@ class AkilliEvApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Akıllı Ev NILM',
-      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.blueAccent),
+      theme: ThemeData(
+        useMaterial3: true, 
+        colorSchemeSeed: Colors.blueAccent,
+        brightness: Brightness.light,
+      ),
       home: const EvDurumuSayfasi(),
     );
   }
@@ -30,34 +34,52 @@ class EvDurumuSayfasi extends StatefulWidget {
 class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
   String durum = "Veri bekleniyor...";
   String anlikGuc = "0 W";
-  String fatura = "0 TL";
+  String fatura = "0.0 TL";
   String aylikKwh = "0 kWh";
   bool yukleniyor = false;
 
+  // Render URL'niz
   final String apiBaseUrl = "https://akilli-ev-nilm.onrender.com"; 
 
   Future<void> verileriGetir() async {
-  try {
-    final response = await http.get(Uri.parse('$apiBaseUrl/ev-durumu'));
-    if (response.statusCode == 200) {
-      final veri = jsonDecode(response.body);
+    setState(() => yukleniyor = true);
+    try {
+      final response = await http.get(
+        Uri.parse('$apiBaseUrl/ev-durumu'),
+        headers: {
+          "ngrok-skip-browser-warning": "true", // Render uyarısını geçmek için şart
+          "Accept": "application/json"
+        },
+      ).timeout(const Duration(seconds: 15));
+      
+      if (response.statusCode == 200) {
+        final veri = jsonDecode(response.body);
+        setState(() {
+          if (veri['durum'] == "Basarili") {
+            anlikGuc = veri['anlik_toplam_watt'] ?? "0 W";
+            fatura = veri['tahmini_fatura'] ?? "0.0 TL";
+            aylikKwh = (veri['aylik_tuketim_kwh'] ?? "0") + " kWh";
+            durum = "Başarılı";
+          } else {
+            // Cihaz kapalıysa değerleri sıfırla
+            anlikGuc = "0 W";
+            fatura = "Cihaz Kapalı";
+            aylikKwh = "0 kWh";
+            durum = "Cihaz Çevrimdışı";
+          }
+          yukleniyor = false;
+        });
+      }
+    } catch (e) {
       setState(() {
-        anlikGuc = veri['anlik_toplam_watt'] ?? "0 W";
-        fatura = veri['tahmini_fatura'] ?? "0.0 TL";
-        aylikKwh = (veri['aylik_tuketim_kwh'] ?? "0") + " kWh";
-        
-        // Python'dan gelen duruma göre başlığı güncelle
-        if (veri['durum'] == "Basarili") {
-          durum = "Başarılı";
-        } else {
-          durum = "Cihaz Çevrimdışı";
-        }
+        durum = "Bağlantı Hatası!";
+        anlikGuc = "0 W";
+        fatura = "0.0 TL";
+        yukleniyor = false;
       });
+      print("Hata detay: $e");
     }
-  } catch (e) {
-    print("Hata: $e");
   }
-}
 
   @override
   void initState() {
@@ -68,7 +90,11 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Ev Enerji Takibi"), centerTitle: true),
+      appBar: AppBar(
+        title: const Text("Ev Enerji Takibi"), 
+        centerTitle: true,
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+      ),
       body: RefreshIndicator(
         onRefresh: verileriGetir,
         child: SingleChildScrollView(
@@ -76,49 +102,78 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
           padding: const EdgeInsets.all(16.0),
           child: Column(
             children: [
+              // SİSTEM DURUMU KARTI
               Card(
+                elevation: 2,
                 child: ListTile(
-                  leading: Icon(durum == "Başarılı" ? Icons.check_circle : Icons.error, color: durum == "Başarılı" ? Colors.green : Colors.red),
+                  leading: Icon(
+                    durum == "Başarılı" ? Icons.check_circle : Icons.error, 
+                    color: durum == "Başarılı" ? Colors.green : Colors.red,
+                    size: 30,
+                  ),
                   title: const Text("Sistem Durumu"),
-                  subtitle: Text(durum),
+                  subtitle: Text(durum, style: const TextStyle(fontWeight: FontWeight.bold)),
                 ),
               ),
-              const SizedBox(height: 10),
-              // GRAFİK KARTI
+              const SizedBox(height: 15),
+              
+              // GRAFİK KARTI (Tıklanabilir)
               InkWell(
                 onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => GrafikSayfasi(apiUrl: apiBaseUrl))),
                 child: Card(
+                  elevation: 4,
                   color: Colors.orange.shade50,
                   child: ListTile(
-                    leading: const Icon(Icons.electric_bolt, color: Colors.orange, size: 40),
-                    title: const Text("Anlık Tüketim (Grafik)"),
-                    subtitle: Text("$anlikGuc\nAnaliz: $aylikKwh"),
-                    trailing: const Icon(Icons.chevron_right),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+                    leading: const Icon(Icons.electric_bolt, color: Colors.orange, size: 50),
+                    title: const Text("Anlık Toplam Güç", style: TextStyle(fontSize: 18)),
+                    subtitle: Text("$anlikGuc\n$aylikKwh", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+                    trailing: const Icon(Icons.show_chart, size: 30),
                   ),
                 ),
               ),
-              const SizedBox(height: 10),
-              // CİHAZ TABLOSU KARTI
+              const SizedBox(height: 15),
+              
+              // CİHAZ TABLO KARTI (Tıklanabilir)
               InkWell(
                 onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => CihazTabloSayfasi(apiUrl: apiBaseUrl))),
                 child: Card(
+                  elevation: 4,
                   color: Colors.blue.shade50,
                   child: const ListTile(
-                    leading: Icon(Icons.devices_other, color: Colors.blue, size: 40),
-                    title: Text("Cihaz Detay Tablosu"),
-                    subtitle: Text("Priz bazlı tüketimler"),
-                    trailing: Icon(Icons.chevron_right),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+                    leading: Icon(Icons.devices_other, color: Colors.blue, size: 50),
+                    title: Text("Cihaz Analizi", style: TextStyle(fontSize: 18)),
+                    subtitle: Text("Priz bazlı detaylı tüketim tablosu"),
+                    trailing: Icon(Icons.table_rows, size: 30),
                   ),
                 ),
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 15),
+              
               // FATURA KARTI
               Card(
+                elevation: 6,
                 color: Colors.green.shade50,
-                child: ListTile(
-                  leading: const Icon(Icons.account_balance_wallet, color: Colors.green, size: 40),
-                  title: const Text("Tahmini Aylık Fatura"),
-                  subtitle: Text(fatura, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.green)),
+                child: Padding(
+                  padding: const EdgeInsets.all(20.0),
+                  child: Column(
+                    children: [
+                      const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.account_balance_wallet, color: Colors.green),
+                          SizedBox(width: 10),
+                          Text("Tahmini Aylık Fatura", style: TextStyle(fontSize: 16)),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        fatura, 
+                        style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.green)
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -127,7 +182,9 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: verileriGetir,
-        child: yukleniyor ? const CircularProgressIndicator() : const Icon(Icons.refresh),
+        child: yukleniyor 
+            ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)) 
+            : const Icon(Icons.refresh),
       ),
     );
   }
@@ -139,25 +196,50 @@ class GrafikSayfasi extends StatelessWidget {
   const GrafikSayfasi({super.key, required this.apiUrl});
 
   Future<List<dynamic>> gecmisVeriGetir() async {
-    final response = await http.get(Uri.parse('$apiUrl/enerji-gecmisi'), headers: {"ngrok-skip-browser-warning": "true"});
+    final response = await http.get(
+      Uri.parse('$apiUrl/enerji-gecmisi'), 
+      headers: {"ngrok-skip-browser-warning": "true"}
+    );
     return jsonDecode(response.body);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Tüketim Grafiği")),
+      appBar: AppBar(title: const Text("1 Saatlik Tüketim Grafiği")),
       body: FutureBuilder<List<dynamic>>(
         future: gecmisVeriGetir(),
         builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+          if (snapshot.hasError || !snapshot.hasData || snapshot.data!.isEmpty) {
+            return const Center(child: Text("Grafik verisi bulunamadı."));
+          }
+
           List<FlSpot> spots = [];
           for (int i = 0; i < snapshot.data!.length; i++) {
-            spots.add(FlSpot(i.toDouble(), (snapshot.data![i]['deger'] ?? 0.0).toDouble()));
+            double deger = (snapshot.data![i]['deger'] ?? 0.0).toDouble();
+            spots.add(FlSpot(i.toDouble(), deger));
           }
+
           return Padding(
-            padding: const EdgeInsets.all(20),
-            child: LineChart(LineChartData(lineBarsData: [LineChartBarData(spots: spots, isCurved: true, color: Colors.orange, barWidth: 4)])),
+            padding: const EdgeInsets.only(top: 40, right: 20, left: 10, bottom: 20),
+            child: LineChart(
+              LineChartData(
+                gridData: const FlGridData(show: true),
+                titlesData: const FlTitlesData(show: false), // Karmaşıklığı önlemek için kapalı
+                borderData: FlBorderData(show: true),
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: spots, 
+                    isCurved: true, 
+                    color: Colors.orange, 
+                    barWidth: 3, 
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(show: true, color: Colors.orange.withOpacity(0.2)),
+                  )
+                ],
+              ),
+            ),
           );
         },
       ),
@@ -171,27 +253,40 @@ class CihazTabloSayfasi extends StatelessWidget {
   const CihazTabloSayfasi({super.key, required this.apiUrl});
 
   Future<List<dynamic>> cihazVeriGetir() async {
-    final response = await http.get(Uri.parse('$apiUrl/cihaz-detaylari'), headers: {"ngrok-skip-browser-warning": "true"});
+    final response = await http.get(
+      Uri.parse('$apiUrl/cihaz-detaylari'), 
+      headers: {"ngrok-skip-browser-warning": "true"}
+    );
     return jsonDecode(response.body);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Cihaz Analizi")),
+      appBar: AppBar(title: const Text("Cihaz Detay Analizi")),
       body: FutureBuilder<List<dynamic>>(
         future: cihazVeriGetir(),
         builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("Cihaz verisi yok."));
+
           return SingleChildScrollView(
-            child: DataTable(
-              columns: const [DataColumn(label: Text('Cihaz')), DataColumn(label: Text('Güç')), DataColumn(label: Text('Maliyet'))],
-              rows: snapshot.data!.map((item) => DataRow(cells: [
-                DataCell(Text(item['cihaz'].toString())),
-                DataCell(Text(item['tuketim'].toString())),
-                // PYTHON KODUNDAKİ 'saatlik_maliyet' İLE EŞLEŞTİ:
-                DataCell(Text(item['saatlik_maliyet'].toString())),
-              ])).toList(),
+            scrollDirection: Axis.vertical,
+            child: SizedBox(
+              width: MediaQuery.of(context).size.width,
+              child: DataTable(
+                headingRowColor: MaterialStateProperty.all(Colors.blue.shade100),
+                columns: const [
+                  DataColumn(label: Text('Cihaz')),
+                  DataColumn(label: Text('Güç (W)')),
+                  DataColumn(label: Text('Maliyet/Saat')),
+                ],
+                rows: snapshot.data!.map((item) => DataRow(cells: [
+                  DataCell(Text(item['cihaz'].toString())),
+                  DataCell(Text(item['tuketim'].toString())),
+                  DataCell(Text(item['saatlik_maliyet'].toString())),
+                ])).toList(),
+              ),
             ),
           );
         },
