@@ -190,7 +190,7 @@ class GrafikSayfasi extends StatefulWidget {
 
 class _GrafikSayfasiState extends State<GrafikSayfasi> {
   int secilenSaat = 1;
-  
+
 Future<List<dynamic>> gecmisVeriGetir() async {
   final response = await http.get(
     Uri.parse('${widget.apiUrl}/enerji-gecmisi?saat=$secilenSaat'),
@@ -202,7 +202,7 @@ Future<List<dynamic>> gecmisVeriGetir() async {
   return jsonDecode(response.body);
 }
 
-  @override
+@override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -223,8 +223,12 @@ Future<List<dynamic>> gecmisVeriGetir() async {
       body: FutureBuilder<List<dynamic>>(
         future: gecmisVeriGetir(),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-          if (snapshot.hasError || !snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("Veri bulunamadı."));
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError || !snapshot.hasData || snapshot.data!.isEmpty) {
+            return const Center(child: Text("Veri bulunamadı."));
+          }
 
           List<FlSpot> spotsBuz = [];
           List<FlSpot> spotsEsp = [];
@@ -237,7 +241,6 @@ Future<List<dynamic>> gecmisVeriGetir() async {
             double e = (v['esp32_ana'] ?? 0.0).toDouble();
             double s = (v['seyyar_priz'] ?? 0.0).toDouble();
 
-            // Yığılmış (Stacked) grafik hesaplaması
             spotsBuz.add(FlSpot(x, b));
             spotsEsp.add(FlSpot(x, b + e));
             spotsSeyyar.add(FlSpot(x, b + e + s));
@@ -261,24 +264,41 @@ Future<List<dynamic>> gecmisVeriGetir() async {
                   padding: const EdgeInsets.only(top: 20, right: 30, left: 10, bottom: 20),
                   child: LineChart(
                     LineChartData(
-                      gridData: FlGridData(show: true, drawVerticalLine: false, horizontalInterval: 200),
+                      lineTouchData: LineTouchData(
+                        touchTooltipData: LineTouchTooltipData(
+                          getTooltipColor: (spot) => Colors.blueGrey.withOpacity(0.8),
+                        ),
+                      ),
+                      gridData: FlGridData(
+                        show: true,
+                        drawVerticalLine: false,
+                        horizontalInterval: 100,
+                      ),
                       titlesData: FlTitlesData(
                         show: true,
                         rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                         topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                         bottomTitles: AxisTitles(
-                          axisNameWidget: Text("Son $secilenSaat Saatlik Veri Akışı"),
-                          sideTitles: SideTitles(showTitles: true, interval: 10, reservedSize: 30),
+                          axisNameWidget: Text("Zaman Akışı (Son $secilenSaat Saat)"),
+                          sideTitles: SideTitles(
+                            showTitles: true,
+                            reservedSize: 30,
+                            interval: snapshot.data!.length > 5 ? (snapshot.data!.length / 5).toDouble() : 1.0,
+                          ),
                         ),
                         leftTitles: AxisTitles(
-                          axisNameWidget: const Text("Güç (Watt)"),
-                          sideTitles: SideTitles(showTitles: true, reservedSize: 45),
+                          axisNameWidget: const Text("Güç (W)"),
+                          sideTitles: SideTitles(
+                            showTitles: true,
+                            reservedSize: 45,
+                          ),
                         ),
                       ),
+                      borderData: FlBorderData(show: true, border: Border.all(color: Colors.black12)),
                       lineBarsData: [
-                        _bar(spotsSeyyar, Colors.purple), // En üst (Toplam)
-                        _bar(spotsEsp, Colors.red),     // Orta
-                        _bar(spotsBuz, Colors.blue),     // En alt
+                        _bar(spotsSeyyar, Colors.purple.withOpacity(0.7)),
+                        _bar(spotsEsp, Colors.red.withOpacity(0.8)),
+                        _bar(spotsBuz, Colors.blue.withOpacity(0.9)),
                       ],
                     ),
                   ),
@@ -286,22 +306,29 @@ Future<List<dynamic>> gecmisVeriGetir() async {
               ),
             ],
           );
-        },
-      ),
-    );
+        }, // FutureBuilder builder sonu
+      ), // FutureBuilder sonu
+    ); // Scaffold sonu
   }
 
+  // YARDIMCI FONKSİYONLAR (Sınıfın içinde ama build dışında olmalı)
   LineChartBarData _bar(List<FlSpot> s, Color c) => LineChartBarData(
-    spots: s,
-    isCurved: true,
-    color: c,
-    barWidth: 3,
-    dotData: const FlDotData(show: false),
-    belowBarData: BarAreaData(show: true, color: c.withOpacity(0.4)),
-  );
+        spots: s,
+        isCurved: true,
+        color: c,
+        barWidth: 3,
+        dotData: const FlDotData(show: false),
+        belowBarData: BarAreaData(show: true, color: c.withOpacity(0.4)),
+      );
 
-  Widget _lejant(String t, Color c) => Row(children: [Container(width: 12, height: 12, color: c), const SizedBox(width: 4), Text(t, style: const TextStyle(fontWeight: FontWeight.bold))]);
-}
+  Widget _lejant(String t, Color c) => Row(
+        children: [
+          Container(width: 12, height: 12, color: c),
+          const SizedBox(width: 4),
+          Text(t, style: const TextStyle(fontWeight: FontWeight.bold)),
+        ],
+      );
+} // _GrafikSayfasiState sınıfı sonu
 
 // --- TABLO SAYFASI ---
 class CihazTabloSayfasi extends StatelessWidget {
