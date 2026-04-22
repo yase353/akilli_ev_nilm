@@ -162,7 +162,7 @@ def get_enerji_gecmisi(saat: int = 1):
                 "zaman": time,
                 "buzdolabi": devices.get("buzdolabi", 0.0),
                 # BURASI DEĞİŞTİ: Influx'tan 'ana_sayac'ı al, Flutter'a 'esp32_ana' diye gönder
-                "esp32_ana": devices.get("ana_sayac", 0.0), 
+                "esp32_ana": devices.get("ana_sayac", 0.0) if devices else 0.0,
                 "seyyar_priz": devices.get("seyyar_priz", 0.0)
             })
             
