@@ -128,14 +128,13 @@ def get_enerji_gecmisi(saat: int = 1):
     client = get_influx_client()
     query_api = client.query_api()
     
-    # Kullanıcının seçtiği saate göre dinamik sorgu
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -{saat}h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
-        |> aggregateWindow(every: 1m, fn: mean, createEmpty: true)
-        |> group(columns: ["device_id"])
+        |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
+        |> group(columns: ["cihaz"])
     '''
     
     try:
@@ -143,10 +142,8 @@ def get_enerji_gecmisi(saat: int = 1):
         time_map = {}
         
         for table in result:
-            device_id = "bilinmeyen"
-            if table.records:
-                # Cihaz bazlı ayrıştırma için device_id etiketini okuyoruz
-                device_id = table.records[0].values.get("device_id", "bilinmeyen")
+            # Burası önemli: ESP32 kodunda 'cihaz' etiketi kullanıldığı için onu okuyoruz
+            device_id = table.records[0].values.get("cihaz", "bilinmeyen")
             
             for record in table.records:
                 time = record.get_time().isoformat()
@@ -162,7 +159,8 @@ def get_enerji_gecmisi(saat: int = 1):
             final_list.append({
                 "zaman": time,
                 "buzdolabi": devices.get("buzdolabi", 0.0),
-                "esp32_ana": devices.get("esp32_ana", 0.0),
+                # BURASI DEĞİŞTİ: Influx'tan 'ana_sayac'ı al, Flutter'a 'esp32_ana' diye gönder
+                "esp32_ana": devices.get("ana_sayac", 0.0), 
                 "seyyar_priz": devices.get("seyyar_priz", 0.0)
             })
             
@@ -174,6 +172,3 @@ def get_enerji_gecmisi(saat: int = 1):
         return []
     finally:
         client.close()
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
