@@ -134,7 +134,6 @@ def get_enerji_gecmisi(saat: int = 1):
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
         |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
-        |> group(columns: ["cihaz"])
     '''
     
     try:
@@ -142,27 +141,31 @@ def get_enerji_gecmisi(saat: int = 1):
         time_map = {}
         
         for table in result:
-            if table.records:
-                # BU SATIRI EKLEYEREK GELEN GERÇEK İSMİ GÖRECEĞİZ
-                print(f"DEBUG: Influx'tan gelen cihaz ismi: {table.records[0].values.get('cihaz')}")
-                device_id = table.records[0].values.get("cihaz", "bilinmeyen")
-            
             for record in table.records:
                 time = record.get_time().isoformat()
                 value = record.get_value() or 0.0
                 
+                # InfluxDB'den gelen etiketi (cihaz veya device_id) kontrol et
+                # ESP32 kodunda 'cihaz' kullanmıştın
+                tag = record.values.get("cihaz") or record.values.get("device_id") or "bilinmeyen"
+                
                 if time not in time_map:
                     time_map[time] = {}
                 
-                time_map[time][device_id] = round(value, 1)
+                time_map[time][tag] = round(value, 1)
 
         final_list = []
         for time, devices in time_map.items():
+            # Burası kritik: Eğer 'ana_sayac' gelmişse onu al, 
+            # gelmemişse ama listede tek bir cihaz varsa onu da ana sayacı kabul et.
+            ana_guc = devices.get("ana_sayac", 0.0)
+            if ana_guc == 0.0 and len(devices) > 0:
+                ana_guc = list(devices.values())[0]
+
             final_list.append({
                 "zaman": time,
                 "buzdolabi": devices.get("buzdolabi", 0.0),
-                # BURASI DEĞİŞTİ: Influx'tan 'ana_sayac'ı al, Flutter'a 'esp32_ana' diye gönder
-                "esp32_ana": devices.get("ana_sayac", 0.0) if devices else 0.0,
+                "esp32_ana": ana_guc, # Flutter'ın beklediği anahtar
                 "seyyar_priz": devices.get("seyyar_priz", 0.0)
             })
             
@@ -170,7 +173,7 @@ def get_enerji_gecmisi(saat: int = 1):
         return final_list
         
     except Exception as e:
-        print(f"Grafik Hatası: {e}")
+        print(f"HATA: {e}")
         return []
     finally:
         client.close()
