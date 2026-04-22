@@ -42,39 +42,39 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
 
   final String apiBaseUrl = "https://akilli-ev-nilm.onrender.com";
 
-  Future<void> verileriGetir() async {
-    // Otomatik yenilemede kullanıcıyı rahatsız etmemek için sadece ilk yüklemede veya manuel yenilemede loading gösteriyoruz
-    try {
-      final response = await http.get(
-        Uri.parse('$apiBaseUrl/ev-durumu'),
-        headers: {
-          "ngrok-skip-browser-warning": "true",
-          "Accept": "application/json"
-        },
-      ).timeout(const Duration(seconds: 10));
+Future<void> verileriGetir() async {
+  try {
+    final response = await http.get(
+      Uri.parse('$apiBaseUrl/ev-durumu'),
+      headers: {
+        "ngrok-skip-browser-warning": "true",
+        "Accept": "application/json"
+      },
+    ).timeout(const Duration(seconds: 10));
 
-      if (response.statusCode == 200) {
-        final veri = jsonDecode(response.body);
-        setState(() {
-          if (veri['durum'] == "Basarili") {
-            anlikGuc = veri['anlik_toplam_watt'] ?? "0 W";
-            fatura = veri['tahmini_fatura'] ?? "0.0 TL";
-            aylikKwh = (veri['aylik_tuketim_kwh'] ?? "0") + " kWh";
-            durum = "Başarılı";
-          } else {
-            anlikGuc = "0 W";
-            fatura = "Cihaz Kapalı";
-            aylikKwh = "0 kWh";
-            durum = "Cihaz Çevrimdışı";
-          }
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => durum = "Bağlantı Hatası!");
-      }
+    if (response.statusCode == 200) {
+      final veri = jsonDecode(response.body);
+      setState(() {
+        // HATA ÖNLEME: .contains() kullanarak "Basarili" veya "Başarılı" farkını ortadan kaldırıyoruz
+        if (veri['durum'].toString().contains("Basarili") || veri['durum'].toString().contains("Başarılı")) {
+          anlikGuc = veri['anlik_toplam_watt'] ?? "0 W";
+          fatura = veri['tahmini_fatura'] ?? "0.0 TL";
+          aylikKwh = (veri['aylik_tuketim_kwh'] ?? "0") + " kWh";
+          durum = "Başarılı";
+        } else {
+          anlikGuc = "0 W";
+          fatura = "Cihaz Kapalı";
+          aylikKwh = "0 kWh";
+          durum = "Cihaz Çevrimdışı";
+        }
+      });
+    }
+  } catch (e) {
+    if (mounted) {
+      setState(() => durum = "Bağlantı Hatası!");
     }
   }
+}
 
   @override
   void initState() {
@@ -190,14 +190,17 @@ class GrafikSayfasi extends StatefulWidget {
 
 class _GrafikSayfasiState extends State<GrafikSayfasi> {
   int secilenSaat = 1;
-
-  Future<List<dynamic>> gecmisVeriGetir() async {
-    final response = await http.get(
-      Uri.parse('${widget.apiUrl}/enerji-gecmisi?saat=$secilenSaat'),
-      headers: {"ngrok-skip-browser-warning": "true"}
-    );
-    return jsonDecode(response.body);
-  }
+  
+Future<List<dynamic>> gecmisVeriGetir() async {
+  final response = await http.get(
+    Uri.parse('${widget.apiUrl}/enerji-gecmisi?saat=$secilenSaat'),
+    headers: {
+      "ngrok-skip-browser-warning": "true",
+      "Accept": "application/json" // Bu satırı ekle
+    }
+  );
+  return jsonDecode(response.body);
+}
 
   @override
   Widget build(BuildContext context) {
