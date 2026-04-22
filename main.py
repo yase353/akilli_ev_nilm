@@ -142,8 +142,10 @@ def get_enerji_gecmisi(saat: int = 1):
         time_map = {}
         
         for table in result:
-            # Burası önemli: ESP32 kodunda 'cihaz' etiketi kullanıldığı için onu okuyoruz
-            device_id = table.records[0].values.get("cihaz", "bilinmeyen")
+            if table.records:
+                # BU SATIRI EKLEYEREK GELEN GERÇEK İSMİ GÖRECEĞİZ
+                print(f"DEBUG: Influx'tan gelen cihaz ismi: {table.records[0].values.get('cihaz')}")
+                device_id = table.records[0].values.get("cihaz", "bilinmeyen")
             
             for record in table.records:
                 time = record.get_time().isoformat()
