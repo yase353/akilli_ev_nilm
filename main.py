@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from influxdb_client import InfluxDBClient
 import uvicorn
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ==========================================
 # 1. API BAŞLATMA VE AYARLAR
@@ -39,16 +39,15 @@ def get_device_details():
     client = get_influx_client()
     query_api = client.query_api()
 
-    # Varsayılan tablo yapısı
     cihaz_sonuclari = {
-        "esp32_ana": {"cihaz": "Ana Hat (ESP32)", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
+        "ana_sayac": {"cihaz": "Ana Hat (ESP32)", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
         "buzdolabi": {"cihaz": "Akıllı Priz - Buzdolabı", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
         "seyyar_priz": {"cihaz": "Seyyar Priz", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"}
     }
 
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -10m)
+        |> range(start: -5m)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
         |> last()
@@ -56,11 +55,19 @@ def get_device_details():
     
     try:
         result = query_api.query(org=INFLUX_ORG, query=query)
+        now = datetime.now(timezone.utc)
+        
         for table in result:
             for record in table.records:
-                tag_name = record.values.get("device_id", "") # device_id etiketine göre kontrol
+                # Cihaz ismini etiketlerden bul
+                tag_name = record.values.get("cihaz") or record.values.get("device_id")
                 watt = record.get_value()
-                
+                last_time = record.get_time()
+
+                # CANLI KONTROL: Eğer son veri 60 saniyeden eskiyse işleme (Cihaz sökülmüş)
+                if (now - last_time).total_seconds() > 60:
+                    continue
+
                 if tag_name in cihaz_sonuclari:
                     cihaz_sonuclari[tag_name].update({
                         "tuketim": f"{round(watt, 1)}W",
@@ -81,39 +88,54 @@ def get_ev_durumu():
     client = get_influx_client()
     query_api = client.query_api()
     
-    # 24 saatlik ortalama güç verisi
+    # Anlık durumu kontrol etmek için son 1 dakikaya bakıyoruz
+    anlik_query = f'''
+        from(bucket: "{INFLUX_BUCKET}") 
+        |> range(start: -1m) 
+        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim") 
+        |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
+        |> last()
+    '''
+    
+    # Fatura için son 24 saatlik ortalama
     fatura_query = f'from(bucket: "{INFLUX_BUCKET}") |> range(start: -24h) |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim") |> mean()'
     
     try:
+        # ANLIK GÜÇ VE CANLILIK KONTROLÜ
+        anlik_result = query_api.query(org=INFLUX_ORG, query=anlik_query)
+        anlik_watt = 0.0
+        is_alive = False
+        
+        if anlik_result:
+            for table in anlik_result:
+                for record in table.records:
+                    anlik_watt = record.get_value()
+                    # Zaman kontrolü
+                    if (datetime.now(timezone.utc) - record.get_time()).total_seconds() < 60:
+                        is_alive = True
+
+        # FATURA HESAPLAMA
         fatura_result = query_api.query(org=INFLUX_ORG, query=fatura_query)
-        toplam_watt = 0.0
+        ortalama_watt = 0.0
         for table in fatura_result:
             for record in table.records:
-                toplam_watt += record.get_value()
+                ortalama_watt += record.get_value()
 
-        # 1. Aylık toplam tüketimi kWh cinsinden bul
-        aylik_kwh = (toplam_watt * 24 * 30) / 1000
-        
-        # 2. KADEMELİ TARİFE AYARLARI (Nisan 2026 Tahmini)
-        kademe_siniri = 240  # Aylık düşük kademe sınırı (kWh)
-        dusuk_birim_fiyat = 2.07  # TL/kWh (Vergiler dahil düşük)
-        yuksek_birim_fiyat = 3.10  # TL/kWh (Vergiler dahil yüksek)
+        aylik_kwh = (ortalama_watt * 24 * 30) / 1000
+        kademe_siniri = 240
+        dusuk_birim_fiyat = 2.07
+        yuksek_birim_fiyat = 3.10
 
-        # 3. Hesaplama Mantığı
         if aylik_kwh <= kademe_siniri:
-            # Tüketim sınırın altındaysa hepsini ucuzdan hesapla
             tahmini_fatura = aylik_kwh * dusuk_birim_fiyat
         else:
-            # Sınırı aşan kısmı bul
-            ucuz_kisim = kademe_siniri * dusuk_birim_fiyat
-            pahali_kisim = (aylik_kwh - kademe_siniri) * yuksek_birim_fiyat
-            tahmini_fatura = ucuz_kisim + pahali_kisim
+            tahmini_fatura = (kademe_siniri * dusuk_birim_fiyat) + ((aylik_kwh - kademe_siniri) * yuksek_birim_fiyat)
 
         return {
-            "durum": "Basarili" if toplam_watt > 0 else "Cevrimdisi",
-            "tahmini_fatura": f"{round(tahmini_fatura, 2)} TL",
-            "aylik_tuketim_kwh": f"{round(aylik_kwh, 1)}",
-            "anlik_toplam_watt": f"{round(toplam_watt, 1)} W"
+            "durum": "Basarili" if is_alive else "Cevrimdisi",
+            "tahmini_fatura": f"{round(tahmini_fatura, 2)} TL" if is_alive else "0.0 TL",
+            "aylik_tuketim_kwh": f"{round(aylik_kwh, 1)}" if is_alive else "0",
+            "anlik_toplam_watt": f"{round(anlik_watt, 1)} W" if is_alive else "0 W"
         }
     except Exception as e:
         return {"durum": "Hata", "tahmini_fatura": "0.0 TL", "aylik_tuketim_kwh": "0", "anlik_toplam_watt": "0 W"}
@@ -144,29 +166,26 @@ def get_enerji_gecmisi(saat: int = 1):
             for record in table.records:
                 time = record.get_time().isoformat()
                 value = record.get_value() or 0.0
-                
-                # InfluxDB'den gelen etiketi (cihaz veya device_id) kontrol et
-                # ESP32 kodunda 'cihaz' kullanmıştın
                 tag = record.values.get("cihaz") or record.values.get("device_id") or "bilinmeyen"
                 
                 if time not in time_map:
-                    time_map[time] = {}
+                    time_map[time] = {"ana_sayac": 0.0, "buzdolabi": 0.0, "seyyar_priz": 0.0}
                 
-                time_map[time][tag] = round(value, 1)
+                # Eşleştirme: Influx'tan ne gelirse gelsin bizim anahtarlarımıza ata
+                if tag in ["ana_sayac", "esp32_ana"]:
+                    time_map[time]["ana_sayac"] = round(value, 1)
+                elif tag == "buzdolabi":
+                    time_map[time]["buzdolabi"] = round(value, 1)
+                elif tag == "seyyar_priz":
+                    time_map[time]["seyyar_priz"] = round(value, 1)
 
         final_list = []
         for time, devices in time_map.items():
-            # Burası kritik: Eğer 'ana_sayac' gelmişse onu al, 
-            # gelmemişse ama listede tek bir cihaz varsa onu da ana sayacı kabul et.
-            ana_guc = devices.get("ana_sayac", 0.0)
-            if ana_guc == 0.0 and len(devices) > 0:
-                ana_guc = list(devices.values())[0]
-
             final_list.append({
                 "zaman": time,
-                "buzdolabi": devices.get("buzdolabi", 0.0),
-                "esp32_ana": ana_guc, # Flutter'ın beklediği anahtar
-                "seyyar_priz": devices.get("seyyar_priz", 0.0)
+                "buzdolabi": devices["buzdolabi"],
+                "esp32_ana": devices["ana_sayac"], # Flutter burayı bekliyor
+                "seyyar_priz": devices["seyyar_priz"]
             })
             
         final_list.sort(key=lambda x: x["zaman"])
@@ -177,3 +196,6 @@ def get_enerji_gecmisi(saat: int = 1):
         return []
     finally:
         client.close()
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
