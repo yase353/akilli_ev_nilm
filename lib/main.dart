@@ -56,7 +56,7 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
     try {
       final response = await http
           .get(Uri.parse('$apiBaseUrl/ev-durumu'))
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 60));
 
       if (response.statusCode == 200) {
         final veri = jsonDecode(response.body);
@@ -334,7 +334,7 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
     try {
       final response = await http
           .get(Uri.parse('$apiBaseUrl/enerji-gecmisi?saat=$saat'))
-          .timeout(const Duration(seconds: 15));
+          .timeout(const Duration(seconds: 60));
 
       if (response.statusCode == 200) {
         setState(() {
@@ -567,7 +567,7 @@ class _CihazTabloSayfasiState extends State<CihazTabloSayfasi> {
     try {
       final response = await http
           .get(Uri.parse('$apiBaseUrl/cihaz-detaylari'))
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 60));
 
       if (response.statusCode == 200) {
         setState(() {
