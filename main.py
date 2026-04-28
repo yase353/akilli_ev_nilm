@@ -127,7 +127,7 @@ def son_watt_getir(client: InfluxDBClient, cihaz_tag: str) -> float:
 # ==========================================
 # 3. EV DURUMU ENDPOİNTİ
 # ==========================================
-@app.get("/ev-durumu")
+@app.api_route("/ev-durumu", methods=["GET", "HEAD"])
 def get_ev_durumu():
     client = get_influx_client()
     query_api = client.query_api()
