@@ -155,6 +155,9 @@ def get_enerji_gecmisi(saat: int = 1):
     else: pencere = "1h"
 
     query = f'''
+        import "timezone"
+        option location = timezone.location(name: "Europe/Istanbul")
+        
         from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -{saat}h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
