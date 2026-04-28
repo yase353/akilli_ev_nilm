@@ -158,17 +158,16 @@ def get_ev_durumu():
         tahmini_fatura = fatura_hesapla(aylik_kwh)
 
         return {
-            "durum": "Basarili" if is_alive else "Cevrimdisi",
-            "tahmini_fatura": f"{tahmini_fatura} TL",
-            "aylik_tuketim_kwh": f"{aylik_kwh}",
-            "anlik_toplam_watt": f"{round(anlik_watt, 1)} W",
-            "aktif_cihaz": aktif_cihaz
+          "durum": "Basarili",
+         "tahmini_fatura": "0.0 TL",
+         "aylik_tuketim_kwh": "0.0",
+         "anlik_toplam_watt": "0.0 W",
+         "aktif_cihaz": "Test modu"
         }
     except Exception as e:
         return {"durum": "Hata", "mesaj": str(e)}
     finally:
         client.close()
-
 
 # ==========================================
 # 4. CİHAZ DETAYLARI ENDPOİNTİ (YENİ)
