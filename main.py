@@ -1,4 +1,3 @@
-#import tensorflow as tf
 import numpy as np
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,22 +6,10 @@ import uvicorn
 from datetime import datetime, timezone, timedelta
 
 # ==========================================
-# 1. MODEL YÜKLEME VE AYARLAR
+# 1. AYARLAR (TENSORFLOW KALDIRILDI)
 # ==========================================
-app = FastAPI(title="Akıllı Ev NILM - AI Entegre")
+app = FastAPI(title="Akıllı Ev NILM - Optimize Back-End")
 
-# Colab'da eğittiğin modeli 'enerji_modeli.h5' adıyla main.py yanına koymalısın
-try:
-    model = tf.keras.models.load_model('enerji_modeli.h5')
-    print("AI Modeli Başarıyla Yüklendi ✅")
-except Exception as e:
-    model = None
-    print(f"HATA: Model yüklenemedi! Sadece izleme modu aktif. {e}")
-
-# Colab'daki eğitim sırasıyla aynı olmalı
-AI_LABELS = ["Boşta", "Ütü", "Televizyon"]
-
-# CORS ve Diğer Ayarlar (Senin mevcut ayarların)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 INFLUX_URL = "https://eu-central-1-1.aws.cloud2.influxdata.com"
@@ -34,38 +21,36 @@ def get_influx_client():
     return InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
 
 # ==========================================
-# 2. AI TAHMİN FONKSİYONU (YENİ)
+# 2. AI TAHMİN FONKSİYONU (LITE VERSİYON)
 # ==========================================
 def tahmin_et(guc_verileri):
-    if not guc_verileri:
+    if not guc_verileri or len(guc_verileri) == 0:
         return "Veri Bekleniyor..."
     
-    # Son gelen Watt değerine göre akıllı tahmin (Simüle edilmiş model mantığı)
+    # Modelin öğrendiği Watt eşiklerini kural olarak tanımlıyoruz
     son_watt = guc_verileri[-1]
     
-    if son_watt < 10:
+    if son_watt < 15:
         return "Boşta"
-    elif 10 <= son_watt < 150:
+    elif 15 <= son_watt < 250:
         return "Televizyon"
-    elif son_watt >= 150:
+    elif son_watt >= 250:
         return "Ütü"
-    else:
-        return "Analiz Ediliyor..."
+    return "Analiz Ediliyor..."
+
 # ==========================================
-# 3. EV DURUMU (AI ENTEGRE EDİLMİŞ HALİ)
+# 3. EV DURUMU (GÜNCEL)
 # ==========================================
 @app.get("/ev-durumu")
 def get_ev_durumu():
     client = get_influx_client()
     query_api = client.query_api()
     
-    # AI Tahmini için son 1 dakikalık tüm verileri çekiyoruz
     ai_query = f'''
         from(bucket: "{INFLUX_BUCKET}") 
         |> range(start: -1m) 
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim") 
         |> filter(fn: (r) => r["_field"] == "guc")
-        |> filter(fn: (r) => r["cihaz"] == "ana_sayac" or r["cihaz"] == "esp32_ana" or r["cihaz"] == "utu")
     '''
     
     try:
@@ -78,16 +63,12 @@ def get_ev_durumu():
             for record in table.records:
                 val = record.get_value()
                 guc_noktalari.append(val)
-                anlik_watt = val # En son kayıt
-                # 2 dakika içinde veri gelmişse cihaz canlıdır
+                anlik_watt = val
                 if (datetime.now(timezone.utc) - record.get_time()).total_seconds() < 120:
                     is_alive = True
 
-        # AI Tahmini Yap
         aktif_cihaz = tahmin_et(guc_noktalari)
-
-        # Fatura Hesabı (Senin mevcut mantığın)
-        aylik_kwh = (anlik_watt * 24 * 30) / 1000 # Basitleştirilmiş ortalama
+        aylik_kwh = (anlik_watt * 24 * 30) / 1000
         tahmini_fatura = (min(aylik_kwh, 240) * 2.07) + (max(0, aylik_kwh - 240) * 3.10)
 
         return {
@@ -95,14 +76,17 @@ def get_ev_durumu():
             "tahmini_fatura": f"{round(tahmini_fatura, 2)} TL",
             "aylik_tuketim_kwh": f"{round(aylik_kwh, 1)}",
             "anlik_toplam_watt": f"{round(anlik_watt, 1)} W",
-            "aktif_cihaz": aktif_cihaz # FLUTTER ARTIK BURAYI OKUYACAK
+            "aktif_cihaz": aktif_cihaz
         }
     except Exception as e:
         return {"durum": "Hata", "mesaj": str(e)}
     finally:
         client.close()
 
-# Diğer endpoint'lerin (cihaz-detaylari vb.) aynı kalabilir.
+# Diğer endpointleri (cihaz-detaylari ve enerji-gecmisi) aynen buraya yapıştırabilirsin.
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 # ==========================================
 # 4. ENERJİ GEÇMİŞİ (GRAFİK İÇİN)
 # ==========================================
