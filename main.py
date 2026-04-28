@@ -32,7 +32,6 @@ FIYAT_YUKSEK = 3.10
 def get_influx_client():
     return InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
 
-
 # ==========================================
 # 2. YARDIMCI FONKSİYONLAR
 # ==========================================
@@ -42,23 +41,23 @@ def watt_to_saatlik_tl(watt: float) -> float:
     # Basit hesap: ortalama birim fiyat üzerinden
     return round(kwh_saatlik * FIYAT_DUSUK, 4)
 
-def tahmin_et(guc_verileri: list) -> str:
-    """
-    Kural tabanlı geçici tahmin — CNN-LSTM hazır olunca burası değişecek.
-    """
+def tahmin_et(guc_verileri: list, pf_verileri: list) -> str:
     if not guc_verileri:
         return "Veri Bekleniyor..."
+    
     son_watt = guc_verileri[-1]
+    son_pf = pf_verileri[-1] if pf_verileri else 1.0
+
     if son_watt < 15:
         return "Boşta"
-    elif son_watt < 80:
-        return "Televizyon"
-    elif son_watt < 250:
-        return "Çamaşır Makinesi (Bekleme)"
-    elif son_watt < 1500:
-        return "Çamaşır Makinesi (Yıkama)"
+    elif son_watt < 500 and son_pf > 0.95:
+        return "Ütü"  # Yüksek PF + orta watt = resistif ısıtıcı
+    elif son_watt < 200 and son_pf < 0.85:
+        return "Televizyon"  # Düşük PF + düşük watt = elektronik
+    elif son_watt > 200 and son_pf < 0.80:
+        return "Çamaşır Makinesi"  # Düşük PF + yüksek watt = motor
     else:
-        return "Ütü"
+        return "Bilinmiyor"
 
 def gercek_aylik_kwh_hesapla(client: InfluxDBClient) -> float:
     """Son 30 günün gerçek tüketimini trapez yöntemiyle hesaplar."""
