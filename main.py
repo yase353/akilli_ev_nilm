@@ -175,17 +175,18 @@ def get_enerji_gecmisi(saat: int = 1):
             for record in table.records:
                 time = record.get_time().isoformat()
                 value = record.get_value() or 0.0
-                tag = record.values.get("cihaz") or record.values.get("device_id") or "bilinmeyen"
+                # Etiketi al, küçük harfe çevir ve temizle
+                tag = str(record.values.get("cihaz") or record.values.get("device_id") or "").lower().strip()
                 
                 if time not in time_map:
                     time_map[time] = {"ana_sayac": 0.0, "buzdolabi": 0.0, "seyyar_priz": 0.0}
                 
-                # Influx'taki 'utu' ve 'camasir_makinesi' etiketlerini Flutter'a çeviriyoruz
-                if tag in ["ana_sayac", "esp32_ana"]:
+                # ÇOK ESNEK EŞLEŞTİRME:
+                if any(x in tag for x in ["ana", "esp"]):
                     time_map[time]["ana_sayac"] = round(value, 1)
-                elif tag in ["buzdolabi", "utu"]:  # Ütü verisini buzdolabına eşitledik
+                elif any(x in tag for x in ["buz", "utu"]): # 'utu' veya 'buz' geçiyorsa buzdolabına yaz
                     time_map[time]["buzdolabi"] = round(value, 1)
-                elif tag in ["seyyar_priz", "camasir_makinesi"]: # Çamaşır makinesini seyyara eşitledik
+                elif any(x in tag for x in ["seyyar", "camasir", "priz"]): # 'camasir' veya 'priz' geçiyorsa seyyara yaz
                     time_map[time]["seyyar_priz"] = round(value, 1)
 
         final_list = []
