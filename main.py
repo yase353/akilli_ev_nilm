@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from influxdb_client import InfluxDBClient
 import uvicorn
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # ==========================================
 # 1. API BAŞLATMA VE AYARLAR
@@ -39,6 +39,7 @@ def get_device_details():
     client = get_influx_client()
     query_api = client.query_api()
 
+    # Flutter'ın beklediği anahtarlar (key) sabit kalmalı
     cihaz_sonuclari = {
         "ana_sayac": {"cihaz": "Ana Hat (ESP32)", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
         "buzdolabi": {"cihaz": "Akıllı Priz - Buzdolabı", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
@@ -59,17 +60,21 @@ def get_device_details():
         
         for table in result:
             for record in table.records:
-                # Cihaz ismini etiketlerden bul
-                tag_name = record.values.get("cihaz") or record.values.get("device_id")
+                tag = str(record.values.get("cihaz") or record.values.get("device_id") or "").lower().strip()
                 watt = record.get_value()
                 last_time = record.get_time()
 
-                # CANLI KONTROL: Eğer son veri 60 saniyeden eskiyse işleme (Cihaz sökülmüş)
-                if (now - last_time).total_seconds() > 60:
+                if (now - last_time).total_seconds() > 120: # 2 dakika tolerans
                     continue
 
-                if tag_name in cihaz_sonuclari:
-                    cihaz_sonuclari[tag_name].update({
+                # Eşleştirme Mantığı
+                target_key = None
+                if any(x in tag for x in ["ana", "esp"]): target_key = "ana_sayac"
+                elif any(x in tag for x in ["buz", "utu"]): target_key = "buzdolabi"
+                elif any(x in tag for x in ["seyyar", "camasir", "priz"]): target_key = "seyyar_priz"
+
+                if target_key:
+                    cihaz_sonuclari[target_key].update({
                         "tuketim": f"{round(watt, 1)}W",
                         "saatlik_maliyet": f"{round((watt/1000) * 3.5, 2)} TL",
                         "durum": "Aktif" if watt > 5 else "Beklemede"
@@ -88,57 +93,51 @@ def get_ev_durumu():
     client = get_influx_client()
     query_api = client.query_api()
     
-    # Anlık durumu kontrol etmek için son 1 dakikaya bakıyoruz
     anlik_query = f'''
         from(bucket: "{INFLUX_BUCKET}") 
-        |> range(start: -1m) 
+        |> range(start: -2m) 
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim") 
-        |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
+        |> filter(fn: (r) => r["cihaz"] == "ana_sayac" or r["cihaz"] == "esp32_ana")
         |> last()
     '''
     
-    # Fatura için son 24 saatlik ortalama
-    fatura_query = f'from(bucket: "{INFLUX_BUCKET}") |> range(start: -24h) |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim") |> mean()'
+    fatura_query = f'''
+        from(bucket: "{INFLUX_BUCKET}") 
+        |> range(start: -24h) 
+        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim") 
+        |> filter(fn: (r) => r["_field"] == "guc")
+        |> mean()
+    '''
     
     try:
-        # ANLIK GÜÇ VE CANLILIK KONTROLÜ
         anlik_result = query_api.query(org=INFLUX_ORG, query=anlik_query)
         anlik_watt = 0.0
         is_alive = False
         
-        if anlik_result:
-            for table in anlik_result:
-                for record in table.records:
-                    anlik_watt = record.get_value()
-                    # Zaman kontrolü
-                    if (datetime.now(timezone.utc) - record.get_time()).total_seconds() < 60:
-                        is_alive = True
+        for table in anlik_result:
+            for record in table.records:
+                anlik_watt = record.get_value()
+                if (datetime.now(timezone.utc) - record.get_time()).total_seconds() < 120:
+                    is_alive = True
 
-        # FATURA HESAPLAMA
         fatura_result = query_api.query(org=INFLUX_ORG, query=fatura_query)
         ortalama_watt = 0.0
         for table in fatura_result:
             for record in table.records:
-                ortalama_watt += record.get_value()
+                ortalama_watt = record.get_value() or 0.0
 
         aylik_kwh = (ortalama_watt * 24 * 30) / 1000
-        kademe_siniri = 240
-        dusuk_birim_fiyat = 2.07
-        yuksek_birim_fiyat = 3.10
-
-        if aylik_kwh <= kademe_siniri:
-            tahmini_fatura = aylik_kwh * dusuk_birim_fiyat
-        else:
-            tahmini_fatura = (kademe_siniri * dusuk_birim_fiyat) + ((aylik_kwh - kademe_siniri) * yuksek_birim_fiyat)
+        # Türkiye Kademeli Tarife (2024 simülasyonu)
+        tahmini_fatura = (min(aylik_kwh, 240) * 2.07) + (max(0, aylik_kwh - 240) * 3.10)
 
         return {
             "durum": "Basarili" if is_alive else "Cevrimdisi",
-            "tahmini_fatura": f"{round(tahmini_fatura, 2)} TL" if is_alive else "0.0 TL",
-            "aylik_tuketim_kwh": f"{round(aylik_kwh, 1)}" if is_alive else "0",
-            "anlik_toplam_watt": f"{round(anlik_watt, 1)} W" if is_alive else "0 W"
+            "tahmini_fatura": f"{round(tahmini_fatura, 2)} TL",
+            "aylik_tuketim_kwh": f"{round(aylik_kwh, 1)}",
+            "anlik_toplam_watt": f"{round(anlik_watt, 1)} W"
         }
     except Exception as e:
-        return {"durum": "Hata", "tahmini_fatura": "0.0 TL", "aylik_tuketim_kwh": "0", "anlik_toplam_watt": "0 W"}
+        return {"durum": "Hata", "mesaj": str(e)}
     finally:
         client.close()
 
@@ -150,13 +149,10 @@ def get_enerji_gecmisi(saat: int = 1):
     client = get_influx_client()
     query_api = client.query_api()
     
-    # --- YENİ MANTIK: Süre uzadıkça veri aralığını genişlet ---
-    if saat <= 1:
-        pencere = "1m"   # Son 1 saat için her 1 dakika
-    elif saat <= 24:
-        pencere = "5m"   # Son 24 saat için her 5 dakika
-    else:
-        pencere = "1h"   # 1 hafta (168s) için her 1 saat (Grafiği yormaz)
+    # Süreye göre veri sıklığı ayarı (Flutter grafiği yorulmasın diye)
+    if saat <= 1: pencere = "1m"
+    elif saat <= 24: pencere = "5m"
+    else: pencere = "1h"
 
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
@@ -173,20 +169,20 @@ def get_enerji_gecmisi(saat: int = 1):
         
         for table in result:
             for record in table.records:
+                # ISO formatında zamanı al (Flutter DateTime.parse için uygun)
                 time = record.get_time().isoformat()
                 value = record.get_value() or 0.0
-                # Etiketi al, küçük harfe çevir ve temizle
-                tag = str(record.values.get("cihaz") or record.values.get("device_id") or "").lower().strip()
+                tag = str(record.values.get("cihaz") or "").lower().strip()
                 
                 if time not in time_map:
                     time_map[time] = {"ana_sayac": 0.0, "buzdolabi": 0.0, "seyyar_priz": 0.0}
                 
-                # ÇOK ESNEK EŞLEŞTİRME:
+                # Esnek eşleştirme ile veriyi doğru kategoriye yaz
                 if any(x in tag for x in ["ana", "esp"]):
                     time_map[time]["ana_sayac"] = round(value, 1)
-                elif any(x in tag for x in ["buz", "utu"]): # 'utu' veya 'buz' geçiyorsa buzdolabına yaz
+                elif any(x in tag for x in ["buz", "utu"]):
                     time_map[time]["buzdolabi"] = round(value, 1)
-                elif any(x in tag for x in ["seyyar", "camasir", "priz"]): # 'camasir' veya 'priz' geçiyorsa seyyara yaz
+                elif any(x in tag for x in ["seyyar", "camasir", "priz"]):
                     time_map[time]["seyyar_priz"] = round(value, 1)
 
         final_list = []
@@ -202,7 +198,7 @@ def get_enerji_gecmisi(saat: int = 1):
         return final_list
         
     except Exception as e:
-        print(f"HATA: {e}")
+        print(f"GRAFİK HATASI: {e}")
         return []
     finally:
         client.close()
