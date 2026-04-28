@@ -150,12 +150,21 @@ def get_enerji_gecmisi(saat: int = 1):
     client = get_influx_client()
     query_api = client.query_api()
     
+    # --- YENİ MANTIK: Süre uzadıkça veri aralığını genişlet ---
+    if saat <= 1:
+        pencere = "1m"   # Son 1 saat için her 1 dakika
+    elif saat <= 24:
+        pencere = "5m"   # Son 24 saat için her 5 dakika
+    else:
+        pencere = "1h"   # 1 hafta (168s) için her 1 saat (Grafiği yormaz)
+
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -{saat}h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
-        |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
+        |> aggregateWindow(every: {pencere}, fn: mean, createEmpty: true)
+        |> fill(value: 0.0)
     '''
     
     try:
@@ -171,31 +180,21 @@ def get_enerji_gecmisi(saat: int = 1):
                 if time not in time_map:
                     time_map[time] = {"ana_sayac": 0.0, "buzdolabi": 0.0, "seyyar_priz": 0.0}
                 
-                # Eşleştirme: Influx'tan ne gelirse gelsin bizim anahtarlarımıza ata
+                # Influx'taki 'utu' ve 'camasir_makinesi' etiketlerini Flutter'a çeviriyoruz
                 if tag in ["ana_sayac", "esp32_ana"]:
                     time_map[time]["ana_sayac"] = round(value, 1)
-                elif tag == "buzdolabi":
+                elif tag in ["buzdolabi", "utu"]:  # Ütü verisini buzdolabına eşitledik
                     time_map[time]["buzdolabi"] = round(value, 1)
-                elif tag == "seyyar_priz":
+                elif tag in ["seyyar_priz", "camasir_makinesi"]: # Çamaşır makinesini seyyara eşitledik
                     time_map[time]["seyyar_priz"] = round(value, 1)
 
         final_list = []
         for time, devices in time_map.items():
-            # INFLUX -> FLUTTER EŞLEŞTİRMESİ
-            # Influx'ta 'utu' olan veriyi Flutter'ın 'buzdolabi' anahtarına koyuyoruz
-            buzdolabi_verisi = devices.get("utu", 0.0) 
-            
-            # Influx'ta 'camasir_makinesi' olan veriyi Flutter'ın 'seyyar_priz' anahtarına koyuyoruz
-            seyyar_verisi = devices.get("camasir_makinesi", 0.0)
-            
-            # Influx'ta 'ana_sayac' veya 'esp32_ana' olanı ana hatta koyuyoruz
-            ana_hat_verisi = devices.get("ana_sayac") or devices.get("esp32_ana") or 0.0
-
             final_list.append({
                 "zaman": time,
-                "buzdolabi": buzdolabi_verisi,
-                "esp32_ana": ana_hat_verisi,
-                "seyyar_priz": seyyar_verisi
+                "buzdolabi": devices["buzdolabi"],
+                "esp32_ana": devices["ana_sayac"],
+                "seyyar_priz": devices["seyyar_priz"]
             })
             
         final_list.sort(key=lambda x: x["zaman"])
