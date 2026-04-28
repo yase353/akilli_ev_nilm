@@ -43,7 +43,7 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
   Timer? _timer;
 
   // Render veya Ngrok URL'nizi buraya yazın
-  final String apiBaseUrl = "https://amaya-uncrystalled-nonusurpingly.ngrok-free.dev"; 
+  final String apiBaseUrl = "https://akilli-ev-nilm-9.onrender.com/"; 
 
   Future<void> verileriGetir() async {
     try {
