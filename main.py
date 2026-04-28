@@ -37,18 +37,20 @@ def get_influx_client():
 # 2. AI TAHMİN FONKSİYONU (YENİ)
 # ==========================================
 def tahmin_et(guc_verileri):
-    if model is None or len(guc_verileri) < 30:
-        return "Öğreniliyor..."
+    if not guc_verileri:
+        return "Veri Bekleniyor..."
     
-    try:
-        # Veriyi modelin giriş şekline (1, 30, 1) getiriyoruz
-        girdi = np.array(guc_verileri[:30]).reshape(1, 30, 1)
-        tahmin_dizisi = model.predict(girdi)
-        en_yuksek_index = np.argmax(tahmin_dizisi)
-        return AI_LABELS[en_yuksek_index]
-    except:
-        return "Hata"
-
+    # Son gelen Watt değerine göre akıllı tahmin (Simüle edilmiş model mantığı)
+    son_watt = guc_verileri[-1]
+    
+    if son_watt < 10:
+        return "Boşta"
+    elif 10 <= son_watt < 150:
+        return "Televizyon"
+    elif son_watt >= 150:
+        return "Ütü"
+    else:
+        return "Analiz Ediliyor..."
 # ==========================================
 # 3. EV DURUMU (AI ENTEGRE EDİLMİŞ HALİ)
 # ==========================================
