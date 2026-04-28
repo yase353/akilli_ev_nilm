@@ -288,10 +288,9 @@ def get_enerji_gecmisi(saat: int = 1):
 # ==========================================
 # 6. SAĞLIK KONTROLÜ
 # ==========================================
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {"mesaj": "Akıllı Ev NILM API çalışıyor."}
-
 
 # ==========================================
 # 7. SUNUCU (yalnızca bir kez, en sonda)
