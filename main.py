@@ -155,7 +155,7 @@ def get_enerji_gecmisi(saat: int = 1):
         |> range(start: -{saat}h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
-        |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
+        |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
     '''
     
     try:
