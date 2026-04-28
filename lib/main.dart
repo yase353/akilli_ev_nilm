@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:async'; // Zamanlayıcı için gerekli
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:fl_chart/fl_chart.dart';
@@ -28,342 +28,242 @@ class AkilliEvApp extends StatelessWidget {
 
 class EvDurumuSayfasi extends StatefulWidget {
   const EvDurumuSayfasi({super.key});
+
   @override
   State<EvDurumuSayfasi> createState() => _EvDurumuSayfasiState();
 }
 
 class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
-  String durum = "Veri bekleniyor...";
-  String anlikGuc = "0 W";
+  // Veri değişkenleri
+  String durum = "Bağlanıyor...";
+  String anlikWatt = "0 W";
+  String aktifCihaz = "Tespit Ediliyor...";
   String fatura = "0.0 TL";
-  String aylikKwh = "0 kWh";
   bool yukleniyor = false;
-  Timer? _timer; // Canlı akış için zamanlayıcı
+  Timer? _timer;
 
-  final String apiBaseUrl = "https://akilli-ev-nilm.onrender.com";
+  // Render veya Ngrok URL'nizi buraya yazın
+  final String apiBaseUrl = "https://amaya-uncrystalled-nonusurpingly.ngrok-free.dev"; 
 
-Future<void> verileriGetir() async {
-  try {
-    final response = await http.get(
-      Uri.parse('$apiBaseUrl/ev-durumu'),
-      headers: {
-        "ngrok-skip-browser-warning": "true",
-        "Accept": "application/json"
-      },
-    ).timeout(const Duration(seconds: 10));
-
-    if (response.statusCode == 200) {
-      final veri = jsonDecode(response.body);
+  Future<void> verileriGetir() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$apiBaseUrl/ev-durumu'),
+        headers: {"ngrok-skip-browser-warning": "true"},
+      );
+      
+      if (response.statusCode == 200) {
+        final veri = jsonDecode(response.body);
+        setState(() {
+          durum = veri['durum'];
+          anlikWatt = veri['anlik_toplam_watt'];
+          aktifCihaz = veri['aktif_cihaz'] ?? "Bilinmiyor";
+          fatura = veri['tahmini_fatura'];
+          yukleniyor = false;
+        });
+      }
+    } catch (e) {
       setState(() {
-        // HATA ÖNLEME: .contains() kullanarak "Basarili" veya "Başarılı" farkını ortadan kaldırıyoruz
-        if (veri['durum'].toString().contains("Basarili") || veri['durum'].toString().contains("Başarılı")) {
-          anlikGuc = veri['anlik_toplam_watt'] ?? "0 W";
-          fatura = veri['tahmini_fatura'] ?? "0.0 TL";
-          aylikKwh = (veri['aylik_tuketim_kwh'] ?? "0") + " kWh";
-          durum = "Başarılı";
-        } else {
-          anlikGuc = "0 W";
-          fatura = "Cihaz Kapalı";
-          aylikKwh = "0 kWh";
-          durum = "Cihaz Çevrimdışı";
-        }
+        durum = "Bağlantı Hatası";
       });
     }
-  } catch (e) {
-    if (mounted) {
-      setState(() => durum = "Bağlantı Hatası!");
-    }
   }
-}
 
   @override
   void initState() {
     super.initState();
     verileriGetir();
-    // CANLI AKIŞ: Her 5 saniyede bir verileri güncelle
-    _timer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      verileriGetir();
-    });
+    // Her 5 saniyede bir verileri otomatik yenile (Canlı takip)
+    _timer = Timer.periodic(const Duration(seconds: 5), (timer) => verileriGetir());
   }
 
   @override
   void dispose() {
-    _timer?.cancel(); // Sayfa kapanınca zamanlayıcıyı durdur
+    _timer?.cancel();
     super.dispose();
+  }
+
+  // Yapay Zeka Tahmini için Görsel Widget
+  Widget _buildAIPaneli() {
+    IconData cihazIcon = Icons.psychology; // Varsayılan beyin ikonu
+    Color iconColor = Colors.purple;
+
+    if (aktifCihaz.contains("Ütü")) {
+      cihazIcon = Icons.iron;
+      iconColor = Colors.orange;
+    } else if (aktifCihaz.contains("Televizyon")) {
+      cihazIcon = Icons.tv;
+      iconColor = Colors.blue;
+    } else if (aktifCihaz.contains("Boşta")) {
+      cihazIcon = Icons.power_settings_new;
+      iconColor = Colors.grey;
+    }
+
+    return Card(
+      elevation: 5,
+      shadowColor: iconColor.withOpacity(0.3),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: LinearGradient(colors: [iconColor.withOpacity(0.1), Colors.white]),
+        ),
+        child: Row(
+          children: [
+            Icon(cihazIcon, size: 50, color: iconColor),
+            const SizedBox(width: 20),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("AI CANLI TESPİT", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+                  Text(aktifCihaz, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: iconColor)),
+                ],
+              ),
+            ),
+            const CircularProgressIndicator(strokeWidth: 2, color: Colors.green),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Ev Enerji Takibi"),
+        title: const Text("Akıllı Ev NILM Asistanı"),
         centerTitle: true,
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          IconButton(onPressed: verileriGetir, icon: const Icon(Icons.refresh))
+        ],
       ),
-      body: RefreshIndicator(
-        onRefresh: verileriGetir,
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            children: [
-              Card(
-                elevation: 2,
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            // Sistem Durum Şeridi
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+              decoration: BoxDecoration(
+                color: durum == "Basarili" ? Colors.green.shade100 : Colors.red.shade100,
+                borderRadius: BorderRadius.circular(10)
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.circle, size: 10, color: durum == "Basarili" ? Colors.green : Colors.red),
+                  const SizedBox(width: 8),
+                  Text("Sistem: $durum", style: TextStyle(color: durum == "Basarili" ? Colors.green.shade900 : Colors.red.shade900)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            
+            // AI Paneli
+            _buildAIPaneli(),
+            
+            const SizedBox(height: 20),
+
+            // Anlık Güç Kartı
+            InkWell(
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => GrafikSayfasi(apiUrl: apiBaseUrl))),
+              child: Card(
                 child: ListTile(
-                  leading: Icon(
-                    durum == "Başarılı" ? Icons.check_circle : Icons.error,
-                    color: durum == "Başarılı" ? Colors.green : Colors.red,
-                    size: 30,
-                  ),
-                  title: const Text("Sistem Durumu"),
-                  subtitle: Text(durum, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  leading: const Icon(Icons.electric_bolt, color: Colors.orange, size: 40),
+                  title: const Text("Toplam Tüketim"),
+                  subtitle: Text(anlikWatt, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                  trailing: const Icon(Icons.show_chart, color: Colors.orange),
                 ),
               ),
-              const SizedBox(height: 15),
-              InkWell(
-                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => GrafikSayfasi(apiUrl: apiBaseUrl))),
-                child: Card(
-                  elevation: 4,
-                  color: Colors.orange.shade50,
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-                    leading: const Icon(Icons.electric_bolt, color: Colors.orange, size: 50),
-                    title: const Text("Tüketim Analizi (Grafik)", style: TextStyle(fontSize: 18)),
-                    subtitle: Text("Anlık: $anlikGuc\nToplam: $aylikKwh", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
-                    trailing: const Icon(Icons.show_chart, size: 30),
-                  ),
-                ),
+            ),
+
+            const SizedBox(height: 10),
+
+            // Fatura Kartı
+            Card(
+              color: Colors.green.shade50,
+              child: ListTile(
+                leading: const Icon(Icons.account_balance_wallet, color: Colors.green, size: 40),
+                title: const Text("Tahmini Aylık Fatura"),
+                subtitle: Text(fatura, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.green)),
               ),
-              const SizedBox(height: 15),
-              InkWell(
-                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => CihazTabloSayfasi(apiUrl: apiBaseUrl))),
-                child: Card(
-                  elevation: 4,
-                  color: Colors.blue.shade50,
-                  child: const ListTile(
-                    contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-                    leading: Icon(Icons.devices_other, color: Colors.blue, size: 50),
-                    title: Text("Cihaz Detay Analizi", style: TextStyle(fontSize: 18)),
-                    subtitle: Text("Priz bazlı detaylı tablo"),
-                    trailing: Icon(Icons.table_rows, size: 30),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 15),
-              Card(
-                elevation: 6,
-                color: Colors.green.shade50,
-                child: Padding(
-                  padding: const EdgeInsets.all(20.0),
-                  child: Column(
-                    children: [
-                      const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.account_balance_wallet, color: Colors.green),
-                          SizedBox(width: 10),
-                          const Text("Tahmini Aylık Fatura", style: TextStyle(fontSize: 16)),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Text(fatura, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.green)),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
+            ),
+
+            const SizedBox(height: 10),
+
+            // Cihaz Detayları Butonu
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => CihazTabloSayfasi(apiUrl: apiBaseUrl))),
+              icon: const Icon(Icons.list_alt),
+              label: const Text("Tüm Cihaz Detaylarını Gör"),
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-// --- GRAFİK SAYFASI (YIĞILMIŞ & ZAMAN SEÇİCİLİ) ---
-class GrafikSayfasi extends StatefulWidget {
+// Grafik ve Tablo sayfaları (API yapılandırmasına uygun şekilde korunmuştur)
+class GrafikSayfasi extends StatelessWidget {
   final String apiUrl;
   const GrafikSayfasi({super.key, required this.apiUrl});
 
   @override
-  State<GrafikSayfasi> createState() => _GrafikSayfasiState();
-}
-
-class _GrafikSayfasiState extends State<GrafikSayfasi> {
-  int secilenSaat = 1;
-
-Future<List<dynamic>> gecmisVeriGetir() async {
-  final response = await http.get(
-    Uri.parse('${widget.apiUrl}/enerji-gecmisi?saat=$secilenSaat'),
-    headers: {
-      "ngrok-skip-browser-warning": "true",
-      "Accept": "application/json" // Bu satırı ekle
-    }
-  );
-  return jsonDecode(response.body);
-}
-
-@override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text("Tüketim Analizi"),
-        actions: [
-          PopupMenuButton<int>(
-            icon: const Icon(Icons.history),
-            onSelected: (value) => setState(() => secilenSaat = value),
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 1, child: Text("Son 1 Saat")),
-              const PopupMenuItem(value: 6, child: Text("Son 6 Saat")),
-              const PopupMenuItem(value: 24, child: Text("Son 24 Saat")),
-              const PopupMenuItem(value: 168, child: Text("Son 1 Hafta")),
-            ],
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text("Tüketim Analizi")),
       body: FutureBuilder<List<dynamic>>(
-        future: gecmisVeriGetir(),
+        future: http.get(Uri.parse('$apiUrl/enerji-gecmisi'), headers: {"ngrok-skip-browser-warning": "true"}).then((res) => jsonDecode(res.body)),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError || !snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text("Veri bulunamadı."));
-          }
-
-          List<FlSpot> spotsBuz = [];
-          List<FlSpot> spotsEsp = [];
-          List<FlSpot> spotsSeyyar = [];
-
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          List<FlSpot> spots = [];
           for (int i = 0; i < snapshot.data!.length; i++) {
-            final v = snapshot.data![i];
-            double x = i.toDouble();
-            double b = (v['buzdolabi'] ?? 0.0).toDouble();
-            double e = (v['esp32_ana'] ?? 0.0).toDouble();
-            double s = (v['seyyar_priz'] ?? 0.0).toDouble();
-
-            spotsBuz.add(FlSpot(x, b));
-            spotsEsp.add(FlSpot(x, b + e));
-            spotsSeyyar.add(FlSpot(x, b + e + s));
+            spots.add(FlSpot(i.toDouble(), (snapshot.data![i]['esp32_ana'] ?? 0).toDouble()));
           }
-
-          return Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    _lejant("Buzdolabı", Colors.blue),
-                    _lejant("ESP32 Ana", Colors.red),
-                    _lejant("Seyyar", Colors.purple),
-                  ],
-                ),
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: LineChart(
+              LineChartData(
+                lineBarsData: [LineChartBarData(spots: spots, isCurved: true, color: Colors.blue, barWidth: 3)],
+                titlesData: const FlTitlesData(show: true),
               ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 20, right: 30, left: 10, bottom: 20),
-                  child: LineChart(
-                    LineChartData(
-                      lineTouchData: LineTouchData(
-                        touchTooltipData: LineTouchTooltipData(
-                          getTooltipColor: (spot) => Colors.blueGrey.withOpacity(0.8),
-                        ),
-                      ),
-                      gridData: FlGridData(
-                        show: true,
-                        drawVerticalLine: false,
-                        horizontalInterval: 100,
-                      ),
-                      titlesData: FlTitlesData(
-                        show: true,
-                        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        bottomTitles: AxisTitles(
-                          axisNameWidget: Text("Zaman Akışı (Son $secilenSaat Saat)"),
-                          sideTitles: SideTitles(
-                            showTitles: true,
-                            reservedSize: 30,
-                            interval: snapshot.data!.length > 5 ? (snapshot.data!.length / 5).toDouble() : 1.0,
-                          ),
-                        ),
-                        leftTitles: AxisTitles(
-                          axisNameWidget: const Text("Güç (W)"),
-                          sideTitles: SideTitles(
-                            showTitles: true,
-                            reservedSize: 45,
-                          ),
-                        ),
-                      ),
-                      borderData: FlBorderData(show: true, border: Border.all(color: Colors.black12)),
-                      lineBarsData: [
-                        _bar(spotsSeyyar, Colors.purple.withOpacity(0.7)),
-                        _bar(spotsEsp, Colors.red.withOpacity(0.8)),
-                        _bar(spotsBuz, Colors.blue.withOpacity(0.9)),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
+            ),
           );
-        }, // FutureBuilder builder sonu
-      ), // FutureBuilder sonu
-    ); // Scaffold sonu
+        },
+      ),
+    );
   }
+}
 
-  // YARDIMCI FONKSİYONLAR (Sınıfın içinde ama build dışında olmalı)
-  LineChartBarData _bar(List<FlSpot> s, Color c) => LineChartBarData(
-        spots: s,
-        isCurved: true,
-        color: c,
-        barWidth: 3,
-        dotData: const FlDotData(show: false),
-        belowBarData: BarAreaData(show: true, color: c.withOpacity(0.4)),
-      );
-
-  Widget _lejant(String t, Color c) => Row(
-        children: [
-          Container(width: 12, height: 12, color: c),
-          const SizedBox(width: 4),
-          Text(t, style: const TextStyle(fontWeight: FontWeight.bold)),
-        ],
-      );
-} // _GrafikSayfasiState sınıfı sonu
-
-// --- TABLO SAYFASI ---
 class CihazTabloSayfasi extends StatelessWidget {
   final String apiUrl;
   const CihazTabloSayfasi({super.key, required this.apiUrl});
 
-  Future<List<dynamic>> cihazVeriGetir() async {
-    final response = await http.get(Uri.parse('$apiUrl/cihaz-detaylari'), headers: {"ngrok-skip-browser-warning": "true"});
-    return jsonDecode(response.body);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Cihaz Analizi")),
+      appBar: AppBar(title: const Text("Cihaz Envanteri")),
       body: FutureBuilder<List<dynamic>>(
-        future: cihazVeriGetir(),
+        future: http.get(Uri.parse('$apiUrl/cihaz-detaylari'), headers: {"ngrok-skip-browser-warning": "true"}).then((res) => jsonDecode(res.body)),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("Veri yok."));
-
-          return SingleChildScrollView(
-            child: DataTable(
-              headingRowColor: MaterialStateProperty.all(Colors.grey.shade200),
-              columns: const [
-                DataColumn(label: Text('Cihaz')),
-                DataColumn(label: Text('Güç (W)')),
-                DataColumn(label: Text('TL/Saat'))
-              ],
-              rows: snapshot.data!.map((item) => DataRow(cells: [
-                DataCell(Text(item['cihaz'].toString())),
-                DataCell(Text(item['tuketim'].toString())),
-                DataCell(Text(item['saatlik_maliyet'].toString())),
-              ])).toList(),
-            ),
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          return ListView.builder(
+            itemCount: snapshot.data!.length,
+            itemBuilder: (context, i) {
+              final item = snapshot.data![i];
+              return Card(
+                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: ListTile(
+                  title: Text(item['cihaz']),
+                  subtitle: Text("Tüketim: ${item['tuketim']} | Maliyet: ${item['saatlik_maliyet']}"),
+                  trailing: Text(item['durum'], style: TextStyle(color: item['durum'] == "Aktif" ? Colors.green : Colors.grey)),
+                ),
+              );
+            },
           );
         },
       ),
