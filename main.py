@@ -181,11 +181,21 @@ def get_enerji_gecmisi(saat: int = 1):
 
         final_list = []
         for time, devices in time_map.items():
+            # INFLUX -> FLUTTER EŞLEŞTİRMESİ
+            # Influx'ta 'utu' olan veriyi Flutter'ın 'buzdolabi' anahtarına koyuyoruz
+            buzdolabi_verisi = devices.get("utu", 0.0) 
+            
+            # Influx'ta 'camasir_makinesi' olan veriyi Flutter'ın 'seyyar_priz' anahtarına koyuyoruz
+            seyyar_verisi = devices.get("camasir_makinesi", 0.0)
+            
+            # Influx'ta 'ana_sayac' veya 'esp32_ana' olanı ana hatta koyuyoruz
+            ana_hat_verisi = devices.get("ana_sayac") or devices.get("esp32_ana") or 0.0
+
             final_list.append({
                 "zaman": time,
-                "buzdolabi": devices["buzdolabi"],
-                "esp32_ana": devices["ana_sayac"], # Flutter burayı bekliyor
-                "seyyar_priz": devices["seyyar_priz"]
+                "buzdolabi": buzdolabi_verisi,
+                "esp32_ana": ana_hat_verisi,
+                "seyyar_priz": seyyar_verisi
             })
             
         final_list.sort(key=lambda x: x["zaman"])
