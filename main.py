@@ -1,3 +1,5 @@
+import tensorflow as tf
+import numpy as np
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from influxdb_client import InfluxDBClient
@@ -5,23 +7,23 @@ import uvicorn
 from datetime import datetime, timezone, timedelta
 
 # ==========================================
-# 1. API BAŞLATMA VE AYARLAR
+# 1. MODEL YÜKLEME VE AYARLAR
 # ==========================================
-app = FastAPI(title="Akıllı Ev NILM - Gelişmiş Arka Uç")
+app = FastAPI(title="Akıllı Ev NILM - AI Entegre")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Colab'da eğittiğin modeli 'enerji_modeli.h5' adıyla main.py yanına koymalısın
+try:
+    model = tf.keras.models.load_model('enerji_modeli.h5')
+    print("AI Modeli Başarıyla Yüklendi ✅")
+except Exception as e:
+    model = None
+    print(f"HATA: Model yüklenemedi! Sadece izleme modu aktif. {e}")
 
-@app.middleware("http")
-async def add_ngrok_bypass_header(request, call_next):
-    response = await call_next(request)
-    response.headers["ngrok-skip-browser-warning"] = "true"
-    return response
+# Colab'daki eğitim sırasıyla aynı olmalı
+AI_LABELS = ["Boşta", "Ütü", "Televizyon"]
+
+# CORS ve Diğer Ayarlar (Senin mevcut ayarların)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 INFLUX_URL = "https://eu-central-1-1.aws.cloud2.influxdata.com"
 INFLUX_TOKEN = "Itz6VHbsOtjsf1sBlQTgecv33SvF84M1rbukAO05dnAgVA9FFW6KF9tXsGHtB9WCUGx-s78LACnQ8ev7GyefMQ=="
@@ -32,115 +34,73 @@ def get_influx_client():
     return InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
 
 # ==========================================
-# 2. CİHAZ LİSTESİ (Tablo İçin)
+# 2. AI TAHMİN FONKSİYONU (YENİ)
 # ==========================================
-@app.get("/cihaz-detaylari")
-def get_device_details():
-    client = get_influx_client()
-    query_api = client.query_api()
-
-    # Flutter'ın beklediği anahtarlar (key) sabit kalmalı
-    cihaz_sonuclari = {
-        "ana_sayac": {"cihaz": "Ana Hat (ESP32)", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
-        "buzdolabi": {"cihaz": "Akıllı Priz - Buzdolabı", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"},
-        "seyyar_priz": {"cihaz": "Seyyar Priz", "tuketim": "0W", "saatlik_maliyet": "0.0 TL", "durum": "Kapalı"}
-    }
-
-    query = f'''
-        from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -5m)
-        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
-        |> filter(fn: (r) => r["_field"] == "guc")
-        |> last()
-    '''
+def tahmin_et(guc_verileri):
+    if model is None or len(guc_verileri) < 30:
+        return "Öğreniliyor..."
     
     try:
-        result = query_api.query(org=INFLUX_ORG, query=query)
-        now = datetime.now(timezone.utc)
-        
-        for table in result:
-            for record in table.records:
-                tag = str(record.values.get("cihaz") or record.values.get("device_id") or "").lower().strip()
-                watt = record.get_value()
-                last_time = record.get_time()
-
-                if (now - last_time).total_seconds() > 120: # 2 dakika tolerans
-                    continue
-
-                # Eşleştirme Mantığı
-                target_key = None
-                if any(x in tag for x in ["ana", "esp"]): target_key = "ana_sayac"
-                elif any(x in tag for x in ["buz", "utu"]): target_key = "buzdolabi"
-                elif any(x in tag for x in ["seyyar", "camasir", "priz"]): target_key = "seyyar_priz"
-
-                if target_key:
-                    cihaz_sonuclari[target_key].update({
-                        "tuketim": f"{round(watt, 1)}W",
-                        "saatlik_maliyet": f"{round((watt/1000) * 3.5, 2)} TL",
-                        "durum": "Aktif" if watt > 5 else "Beklemede"
-                    })
-        return list(cihaz_sonuclari.values())
+        # Veriyi modelin giriş şekline (1, 30, 1) getiriyoruz
+        girdi = np.array(guc_verileri[:30]).reshape(1, 30, 1)
+        tahmin_dizisi = model.predict(girdi)
+        en_yuksek_index = np.argmax(tahmin_dizisi)
+        return AI_LABELS[en_yuksek_index]
     except:
-        return list(cihaz_sonuclari.values())
-    finally:
-        client.close()
+        return "Hata"
 
 # ==========================================
-# 3. EV DURUMU (Ana Sayfa Özet Verileri)
+# 3. EV DURUMU (AI ENTEGRE EDİLMİŞ HALİ)
 # ==========================================
 @app.get("/ev-durumu")
 def get_ev_durumu():
     client = get_influx_client()
     query_api = client.query_api()
     
-    anlik_query = f'''
+    # AI Tahmini için son 1 dakikalık tüm verileri çekiyoruz
+    ai_query = f'''
         from(bucket: "{INFLUX_BUCKET}") 
-        |> range(start: -2m) 
-        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim") 
-        |> filter(fn: (r) => r["cihaz"] == "ana_sayac" or r["cihaz"] == "esp32_ana")
-        |> last()
-    '''
-    
-    fatura_query = f'''
-        from(bucket: "{INFLUX_BUCKET}") 
-        |> range(start: -24h) 
+        |> range(start: -1m) 
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim") 
         |> filter(fn: (r) => r["_field"] == "guc")
-        |> mean()
+        |> filter(fn: (r) => r["cihaz"] == "ana_sayac" or r["cihaz"] == "esp32_ana" or r["cihaz"] == "utu")
     '''
     
     try:
-        anlik_result = query_api.query(org=INFLUX_ORG, query=anlik_query)
-        anlik_watt = 0.0
+        results = query_api.query(org=INFLUX_ORG, query=ai_query)
+        guc_noktalari = []
         is_alive = False
-        
-        for table in anlik_result:
+        anlik_watt = 0.0
+
+        for table in results:
             for record in table.records:
-                anlik_watt = record.get_value()
+                val = record.get_value()
+                guc_noktalari.append(val)
+                anlik_watt = val # En son kayıt
+                # 2 dakika içinde veri gelmişse cihaz canlıdır
                 if (datetime.now(timezone.utc) - record.get_time()).total_seconds() < 120:
                     is_alive = True
 
-        fatura_result = query_api.query(org=INFLUX_ORG, query=fatura_query)
-        ortalama_watt = 0.0
-        for table in fatura_result:
-            for record in table.records:
-                ortalama_watt = record.get_value() or 0.0
+        # AI Tahmini Yap
+        aktif_cihaz = tahmin_et(guc_noktalari)
 
-        aylik_kwh = (ortalama_watt * 24 * 30) / 1000
-        # Türkiye Kademeli Tarife (2024 simülasyonu)
+        # Fatura Hesabı (Senin mevcut mantığın)
+        aylik_kwh = (anlik_watt * 24 * 30) / 1000 # Basitleştirilmiş ortalama
         tahmini_fatura = (min(aylik_kwh, 240) * 2.07) + (max(0, aylik_kwh - 240) * 3.10)
 
         return {
             "durum": "Basarili" if is_alive else "Cevrimdisi",
             "tahmini_fatura": f"{round(tahmini_fatura, 2)} TL",
             "aylik_tuketim_kwh": f"{round(aylik_kwh, 1)}",
-            "anlik_toplam_watt": f"{round(anlik_watt, 1)} W"
+            "anlik_toplam_watt": f"{round(anlik_watt, 1)} W",
+            "aktif_cihaz": aktif_cihaz # FLUTTER ARTIK BURAYI OKUYACAK
         }
     except Exception as e:
         return {"durum": "Hata", "mesaj": str(e)}
     finally:
         client.close()
 
+# Diğer endpoint'lerin (cihaz-detaylari vb.) aynı kalabilir.
 # ==========================================
 # 4. ENERJİ GEÇMİŞİ (GRAFİK İÇİN)
 # ==========================================
@@ -157,7 +117,7 @@ def get_enerji_gecmisi(saat: int = 1):
     query = f'''
         import "timezone"
         option location = timezone.location(name: "Europe/Istanbul")
-        
+
         from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -{saat}h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
