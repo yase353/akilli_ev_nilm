@@ -181,7 +181,7 @@ def get_cihaz_detaylari():
     Eğer tag adların farklıysa aşağıdaki 'tag' alanlarını güncelle.
     """
     cihazlar = [
-        {"ad": "Ana Sayaç (ESP32)", "tag": "esp32_ana",   "ikon": "electric_meter"},
+        {"ad": "Ana Sayaç (ESP32)", "tag": "ana_sayac",   "ikon": "electric_meter"},
         {"ad": "Buzdolabı",         "tag": "buzdolabi",   "ikon": "kitchen"},
         {"ad": "Seyyar Priz",       "tag": "seyyar_priz", "ikon": "power"},
     ]
