@@ -2,4 +2,5 @@ fastapi
 uvicorn
 influxdb-client
 numpy
-pandas
+tensorflow
+pickle5
