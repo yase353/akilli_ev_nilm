@@ -2,5 +2,4 @@ fastapi
 uvicorn
 influxdb-client
 numpy
-tensorflow
-pickle5
+tensorflow-cpu==2.13.0
