@@ -440,14 +440,6 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
                                     barWidth: 2,
                                     dotData: const FlDotData(show: false),
                                   ),
-                                  // Ütü
-                                  LineChartBarData(
-                                    spots: _spotsOlustur("utu"),
-                                    isCurved: true,
-                                    color: Colors.orange,
-                                    barWidth: 2,
-                                    dotData: const FlDotData(show: false),
-                                  ),
                                   // Seyyar Priz
                                   LineChartBarData(
                                     spots: _spotsOlustur("seyyar_priz"),
@@ -509,8 +501,6 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
                   _LejantItem(renk: Colors.blue, etiket: "Ana Sayaç"),
                   SizedBox(width: 12),
                   _LejantItem(renk: Colors.teal, etiket: "Buzdolabı"),
-                  SizedBox(width: 12),
-                  _LejantItem(renk: Colors.orange, etiket: "Ütü"),
                   SizedBox(width: 12),
                   _LejantItem(renk: Colors.purple, etiket: "Seyyar"),
                 ],
