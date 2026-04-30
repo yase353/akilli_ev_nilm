@@ -245,7 +245,6 @@ def get_enerji_gecmisi(saat: int = 1):
                     time_map[time] = {
                         "ana_sayac":   0.0,
                         "buzdolabi":   0.0,
-                        "utu":         0.0,
                         "seyyar_priz": 0.0
                     }
 
@@ -253,8 +252,6 @@ def get_enerji_gecmisi(saat: int = 1):
                     time_map[time]["ana_sayac"]   = round(value, 1)
                 elif "buz" in tag or "dolap" in tag:
                     time_map[time]["buzdolabi"]   = round(value, 1)
-                elif "utu" in tag:
-                    time_map[time]["utu"]         = round(value, 1)
                 elif any(x in tag for x in ["seyyar", "camasir", "priz", "tv", "televizyon"]):
                     time_map[time]["seyyar_priz"] = round(value, 1)
 
@@ -263,7 +260,6 @@ def get_enerji_gecmisi(saat: int = 1):
                 "zaman":       time,
                 "buzdolabi":   devices["buzdolabi"],
                 "esp32_ana":   devices["ana_sayac"],
-                "utu":         devices["utu"],
                 "seyyar_priz": devices["seyyar_priz"]
             }
             for time, devices in time_map.items()
