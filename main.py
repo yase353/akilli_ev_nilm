@@ -5,6 +5,7 @@ from influxdb_client import InfluxDBClient
 import uvicorn
 from datetime import datetime, timezone
 import os
+import pickle
 
 # ==========================================
 # 1. AYARLAR
@@ -31,7 +32,31 @@ def get_influx_client():
 
 
 # ==========================================
-# 2. YARDIMCI FONKSİYONLAR
+# 2. CNN-LSTM MODEL YUKLEME
+# Model dosyalari varsa yukle, yoksa kural tabanli calis
+# Model egitimi bitince nilm_model.keras, scaler.pkl,
+# label_encoder.pkl dosyalarini GitHub'a yukle — otomatik gececek
+# ==========================================
+MODEL_HAZIR = False
+model  = None
+scaler = None
+le     = None
+
+try:
+    import tensorflow as tf
+    model = tf.keras.models.load_model("nilm_model.keras")
+    with open("scaler.pkl", "rb") as f:
+        scaler = pickle.load(f)
+    with open("label_encoder.pkl", "rb") as f:
+        le = pickle.load(f)
+    MODEL_HAZIR = True
+    print("CNN-LSTM modeli yuklendi ✓")
+except Exception as e:
+    print(f"Model yuklenemedi, kural tabanli mod aktif: {e}")
+
+
+# ==========================================
+# 3. YARDIMCI FONKSİYONLAR
 # ==========================================
 def watt_to_saatlik_tl(watt: float) -> float:
     kwh_saatlik = watt / 1000.0
@@ -41,6 +66,20 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
     if not guc_verileri:
         return "Veri Bekleniyor..."
 
+    # Model varsa CNN-LSTM ile tahmin yap
+    if MODEL_HAZIR and len(guc_verileri) >= 30:
+        try:
+            pencere = np.array([
+                [guc_verileri[i], pf_verileri[i] if i < len(pf_verileri) else 1.0]
+                for i in range(-30, 0)
+            ])
+            pencere_scaled = scaler.transform(pencere).reshape(1, 30, 2)
+            tahmin = model.predict(pencere_scaled, verbose=0)
+            return le.inverse_transform([np.argmax(tahmin)])[0]
+        except Exception as e:
+            print(f"Model tahmin hatasi: {e}")
+
+    # Model yoksa veya hata varsa kural tabanli calis
     son_watt = guc_verileri[-1]
     son_pf   = pf_verileri[-1] if pf_verileri else 1.0
 
@@ -141,7 +180,7 @@ def seyyar_watt_getir(client: InfluxDBClient) -> float:
 
 
 # ==========================================
-# 3. EV DURUMU ENDPOINTI
+# 4. EV DURUMU ENDPOINTI
 # ==========================================
 @app.api_route("/ev-durumu", methods=["GET", "HEAD"])
 def get_ev_durumu():
@@ -196,11 +235,10 @@ def get_ev_durumu():
 
 
 # ==========================================
-# 4. CIHAZ DETAYLARI ENDPOINTI
+# 5. CIHAZ DETAYLARI ENDPOINTI
 # ==========================================
 @app.api_route("/cihaz-detaylari", methods=["GET", "HEAD"])
 def get_cihaz_detaylari():
-    # Sabit cihazlar
     cihazlar = [
         {"ad": "Ana Sayac (ESP32)", "tag": "ana_sayac", "ikon": "electric_meter"},
         {"ad": "Buzdolabi",         "tag": "buzdolabi", "ikon": "kitchen"},
@@ -210,7 +248,6 @@ def get_cihaz_detaylari():
     try:
         sonuclar = []
 
-        # Sabit cihazlari getir
         for cihaz in cihazlar:
             watt       = son_watt_getir(client, cihaz["tag"])
             saatlik_tl = watt_to_saatlik_tl(watt)
@@ -223,7 +260,6 @@ def get_cihaz_detaylari():
                 "durum":           durum
             })
 
-        # Seyyar priz: Shelly'de hangi isim olursa olsun otomatik algilama
         seyyar_watt = seyyar_watt_getir(client)
         seyyar_tl   = watt_to_saatlik_tl(seyyar_watt)
         sonuclar.append({
@@ -242,7 +278,7 @@ def get_cihaz_detaylari():
 
 
 # ==========================================
-# 5. ENERJI GECMISI ENDPOINTI
+# 6. ENERJI GECMISI ENDPOINTI
 # ==========================================
 @app.api_route("/enerji-gecmisi", methods=["GET", "HEAD"])
 def get_enerji_gecmisi(saat: int = 1):
@@ -314,7 +350,7 @@ def get_enerji_gecmisi(saat: int = 1):
 
 
 # ==========================================
-# 6. SAGLIK KONTROLU
+# 7. SAGLIK KONTROLU
 # ==========================================
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
@@ -326,7 +362,7 @@ def ping():
 
 
 # ==========================================
-# 7. SUNUCU
+# 8. SUNUCU
 # ==========================================
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
