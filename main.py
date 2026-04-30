@@ -19,7 +19,7 @@ app.add_middleware(
 )
 
 INFLUX_URL    = os.environ.get("INFLUX_URL",    "https://eu-central-1-1.aws.cloud2.influxdata.com")
-INFLUX_TOKEN  = os.environ.get("INFLUX_TOKEN",  "Ce_D58Wv76g1kf0Qx9oqIiGZ-CTHIYUIfGnOAHH7bw3UmXie7F6yXfZyn6rlKU-EA0wm0YT7KloeF-ptcYD6bw==")
+INFLUX_TOKEN  = os.environ.get("INFLUX_TOKEN",  "")
 INFLUX_ORG    = os.environ.get("INFLUX_ORG",    "2a22ab52153e142d")
 INFLUX_BUCKET = os.environ.get("INFLUX_BUCKET", "tez_verileri")
 
@@ -113,6 +113,32 @@ def son_watt_getir(client: InfluxDBClient, cihaz_tag: str) -> float:
         print(f"WATT GETIR HATASI ({cihaz_tag}): {e}")
         return 0.0
 
+def seyyar_watt_getir(client: InfluxDBClient) -> float:
+    """
+    ana_sayac ve buzdolabi disindaki her tag'i seyyar priz olarak alir.
+    Shelly'de isim ne olursa olsun (televizyon, utu, camasir_makinesi vb.)
+    main.py'de degisiklik yapmaya gerek kalmaz.
+    """
+    query_api = client.query_api()
+    query = f'''
+        from(bucket: "{INFLUX_BUCKET}")
+        |> range(start: -2m)
+        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+        |> filter(fn: (r) => r["_field"] == "guc")
+        |> filter(fn: (r) => r["cihaz"] != "ana_sayac")
+        |> filter(fn: (r) => r["cihaz"] != "buzdolabi")
+        |> mean()
+    '''
+    try:
+        result = query_api.query(org=INFLUX_ORG, query=query)
+        for table in result:
+            for record in table.records:
+                return round(record.get_value() or 0.0, 1)
+        return 0.0
+    except Exception as e:
+        print(f"SEYYAR WATT HATASI: {e}")
+        return 0.0
+
 
 # ==========================================
 # 3. EV DURUMU ENDPOINTI
@@ -174,20 +200,21 @@ def get_ev_durumu():
 # ==========================================
 @app.api_route("/cihaz-detaylari", methods=["GET", "HEAD"])
 def get_cihaz_detaylari():
+    # Sabit cihazlar
     cihazlar = [
         {"ad": "Ana Sayac (ESP32)", "tag": "ana_sayac", "ikon": "electric_meter"},
         {"ad": "Buzdolabi",         "tag": "buzdolabi", "ikon": "kitchen"},
-        {"ad": "Seyyar Priz",       "tag": "utu",       "ikon": "power"},
     ]
 
     client = get_influx_client()
     try:
         sonuclar = []
+
+        # Sabit cihazlari getir
         for cihaz in cihazlar:
             watt       = son_watt_getir(client, cihaz["tag"])
             saatlik_tl = watt_to_saatlik_tl(watt)
             durum      = "Aktif" if watt > 5 else "Bekleme"
-
             sonuclar.append({
                 "cihaz":           cihaz["ad"],
                 "ikon":            cihaz["ikon"],
@@ -195,6 +222,17 @@ def get_cihaz_detaylari():
                 "saatlik_maliyet": f"{saatlik_tl} TL/saat",
                 "durum":           durum
             })
+
+        # Seyyar priz: Shelly'de hangi isim olursa olsun otomatik algilama
+        seyyar_watt = seyyar_watt_getir(client)
+        seyyar_tl   = watt_to_saatlik_tl(seyyar_watt)
+        sonuclar.append({
+            "cihaz":           "Seyyar Priz",
+            "ikon":            "power",
+            "anlik_watt":      f"{seyyar_watt} W",
+            "saatlik_maliyet": f"{seyyar_tl} TL/saat",
+            "durum":           "Aktif" if seyyar_watt > 5 else "Bekleme"
+        })
 
         return sonuclar
     except Exception as e:
@@ -252,7 +290,7 @@ def get_enerji_gecmisi(saat: int = 1):
                     time_map[time]["ana_sayac"]   = round(value, 1)
                 elif "buz" in tag or "dolap" in tag:
                     time_map[time]["buzdolabi"]   = round(value, 1)
-                elif any(x in tag for x in ["seyyar", "camasir", "priz", "tv", "televizyon"]):
+                elif tag not in ["ana_sayac", "buzdolabi", ""]:
                     time_map[time]["seyyar_priz"] = round(value, 1)
 
         final_list = [
