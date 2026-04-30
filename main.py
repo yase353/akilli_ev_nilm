@@ -1,680 +1,298 @@
-import 'dart:async';
-import 'dart:convert';
-import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:fl_chart/fl_chart.dart';
+import numpy as np
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from influxdb_client import InfluxDBClient
+import uvicorn
+from datetime import datetime, timezone
+import os
 
-void main() {
-  runApp(const AkilliEvApp());
-}
+# ==========================================
+# 1. AYARLAR
+# ==========================================
+app = FastAPI(title="Akıllı Ev NILM - Back-End")
 
-class AkilliEvApp extends StatelessWidget {
-  const AkilliEvApp({super.key});
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Akıllı Ev NILM',
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: Colors.blueAccent,
-        brightness: Brightness.light,
-      ),
-      home: const EvDurumuSayfasi(),
-    );
-  }
-}
+INFLUX_URL    = os.environ.get("INFLUX_URL",    "https://eu-central-1-1.aws.cloud2.influxdata.com")
+INFLUX_TOKEN  = os.environ.get("INFLUX_TOKEN",  "Ce_D58Wv76g1kf0Qx9oqIiGZ-CTHIYUIfGnOAHH7bw3UmXie7F6yXfZyn6rlKU-EA0wm0YT7KloeF-ptcYD6bw==")
+INFLUX_ORG    = os.environ.get("INFLUX_ORG",    "2a22ab52153e142d")
+INFLUX_BUCKET = os.environ.get("INFLUX_BUCKET", "tez_verileri")
 
-// ==========================================
-// DÜZELTME 1: URL'de çift slash sorunu giderildi.
-// Sondaki '/' kaldırıldı; endpoint çağrılarında '$apiBaseUrl/ev-durumu' gibi
-// kullanılınca '.../ev-durumu' olacak (doğru).
-// ==========================================
-const String apiBaseUrl = "https://akilli-ev-nilm-9.onrender.com";
+FIYAT_DUSUK  = 2.07
+FIYAT_YUKSEK = 3.10
 
-// ==========================================
-// ANA SAYFA
-// ==========================================
-class EvDurumuSayfasi extends StatefulWidget {
-  const EvDurumuSayfasi({super.key});
+def get_influx_client():
+    return InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
 
-  @override
-  State<EvDurumuSayfasi> createState() => _EvDurumuSayfasiState();
-}
 
-class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
-  String durum = "Bağlanıyor...";
-  String anlikWatt = "0 W";
-  String aktifCihaz = "Tespit Ediliyor...";
-  String fatura = "0.0 TL";
-  // DÜZELTME 2: Yüklenme durumu başta true — ilk veri gelene kadar spinner göster
-  bool yukleniyor = true;
-  Timer? _timer;
+# ==========================================
+# 2. YARDIMCI FONKSİYONLAR
+# ==========================================
+def watt_to_saatlik_tl(watt: float) -> float:
+    kwh_saatlik = watt / 1000.0
+    return round(kwh_saatlik * FIYAT_DUSUK, 4)
 
-  Future<void> verileriGetir() async {
-    try {
-      final response = await http
-          .get(Uri.parse('$apiBaseUrl/ev-durumu'))
-          .timeout(const Duration(seconds: 60));
+def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
+    if not guc_verileri:
+        return "Veri Bekleniyor..."
 
-      if (response.statusCode == 200) {
-        final veri = jsonDecode(response.body);
-        setState(() {
-          durum = veri['durum'] ?? "Bilinmiyor";
-          anlikWatt = veri['anlik_toplam_watt'] ?? "0 W";
-          aktifCihaz = veri['aktif_cihaz'] ?? "Bilinmiyor";
-          fatura = veri['tahmini_fatura'] ?? "0.0 TL";
-          yukleniyor = false;
-        });
-      } else {
-        setState(() {
-          durum = "Sunucu Hatası (${response.statusCode})";
-          yukleniyor = false;
-        });
-      }
-    } on TimeoutException {
-      setState(() {
-        durum = "Zaman Aşımı — Render uyandırılıyor olabilir";
-        yukleniyor = false;
-      });
-    } catch (e) {
-      setState(() {
-        durum = "Bağlantı Hatası";
-        yukleniyor = false;
-      });
-    }
-  }
+    son_watt = guc_verileri[-1]
+    son_pf   = pf_verileri[-1] if pf_verileri else 1.0
 
-  @override
-  void initState() {
-    super.initState();
-    verileriGetir();
-    _timer = Timer.periodic(
-      const Duration(seconds: 5),
-      (timer) => verileriGetir(),
-    );
-  }
+    if son_watt < 15:
+        return "Bosta"
+    elif son_watt < 500 and son_pf > 0.95:
+        return "Utu"
+    elif son_watt < 200 and son_pf < 0.85:
+        return "Televizyon"
+    elif son_watt > 200 and son_pf < 0.80:
+        return "Camasir Makinesi"
+    else:
+        return "Bilinmiyor"
 
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
+def gercek_aylik_kwh_hesapla(client: InfluxDBClient) -> float:
+    query_api = client.query_api()
+    query = f'''
+        from(bucket: "{INFLUX_BUCKET}")
+        |> range(start: -30d)
+        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+        |> filter(fn: (r) => r["_field"] == "guc")
+        |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
+        |> sort(columns: ["_time"])
+    '''
+    try:
+        result = query_api.query(org=INFLUX_ORG, query=query)
+        kayitlar = []
+        for table in result:
+            for record in table.records:
+                kayitlar.append((record.get_time(), record.get_value() or 0.0))
 
-  // ==========================================
-  // DÜZELTME 3: CircularProgressIndicator artık sadece veri
-  // yüklenirken gösteriliyor; veri gelince duruyor.
-  // ==========================================
-  Widget _buildAIPaneli() {
-    IconData cihazIcon;
-    Color iconColor;
+        if len(kayitlar) < 2:
+            return 0.0
 
-    if (aktifCihaz.contains("Ütü") || aktifCihaz.contains("Utu")) {
-      cihazIcon = Icons.iron;
-      iconColor = Colors.orange;
-    } else if (aktifCihaz.contains("Televizyon") || aktifCihaz.contains("TV")) {
-      cihazIcon = Icons.tv;
-      iconColor = Colors.blue;
-    } else if (aktifCihaz.contains("Çamaşır") || aktifCihaz.contains("Camasir")) {
-      cihazIcon = Icons.local_laundry_service;
-      iconColor = Colors.teal;
-    } else if (aktifCihaz.contains("Boşta") || aktifCihaz.contains("Bosta")) {
-      cihazIcon = Icons.power_settings_new;
-      iconColor = Colors.grey;
-    } else {
-      cihazIcon = Icons.psychology;
-      iconColor = Colors.purple;
-    }
+        toplam_wh = 0.0
+        for i in range(1, len(kayitlar)):
+            t0, w0 = kayitlar[i - 1]
+            t1, w1 = kayitlar[i]
+            sure_saat = (t1 - t0).total_seconds() / 3600.0
+            ort_watt  = (w0 + w1) / 2.0
+            toplam_wh += ort_watt * sure_saat
 
-    return Card(
-      elevation: 5,
-      shadowColor: iconColor.withOpacity(0.3),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          gradient: LinearGradient(
-            colors: [iconColor.withOpacity(0.1), Colors.white],
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(cihazIcon, size: 50, color: iconColor),
-            const SizedBox(width: 20),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    "AI CANLI TESPİT",
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey,
-                    ),
-                  ),
-                  Text(
-                    aktifCihaz,
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: iconColor,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // DÜZELTME 3: Sadece yüklenirken döner; veri gelince yeşil tik
-            yukleniyor
-                ? const SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.green,
-                    ),
-                  )
-                : const Icon(Icons.check_circle, color: Colors.green),
-          ],
-        ),
-      ),
-    );
-  }
+        return round(toplam_wh / 1000.0, 2)
+    except Exception as e:
+        print(f"FATURA HESAP HATASI: {e}")
+        return 0.0
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Akıllı Ev NILM Asistanı"),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            onPressed: () {
-              setState(() => yukleniyor = true);
-              verileriGetir();
-            },
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
-      ),
-      body: yukleniyor
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  // Sistem Durum Şeridi
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        vertical: 8, horizontal: 16),
-                    decoration: BoxDecoration(
-                      color: durum == "Basarili"
-                          ? Colors.green.shade100
-                          : Colors.red.shade100,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.circle,
-                          size: 10,
-                          color: durum == "Basarili"
-                              ? Colors.green
-                              : Colors.red,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          "Sistem: $durum",
-                          style: TextStyle(
-                            color: durum == "Basarili"
-                                ? Colors.green.shade900
-                                : Colors.red.shade900,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 20),
+def fatura_hesapla(aylik_kwh: float) -> float:
+    ilk_dilim    = min(aylik_kwh, 240) * FIYAT_DUSUK
+    ikinci_dilim = max(0.0, aylik_kwh - 240) * FIYAT_YUKSEK
+    return round(ilk_dilim + ikinci_dilim, 2)
 
-                  // AI Paneli
-                  _buildAIPaneli(),
-                  const SizedBox(height: 20),
+def son_watt_getir(client: InfluxDBClient, cihaz_tag: str) -> float:
+    query_api = client.query_api()
+    query = f'''
+        from(bucket: "{INFLUX_BUCKET}")
+        |> range(start: -2m)
+        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+        |> filter(fn: (r) => r["_field"] == "guc")
+        |> filter(fn: (r) => r["cihaz"] == "{cihaz_tag}")
+        |> mean()
+    '''
+    try:
+        result = query_api.query(org=INFLUX_ORG, query=query)
+        for table in result:
+            for record in table.records:
+                return round(record.get_value() or 0.0, 1)
+        return 0.0
+    except Exception as e:
+        print(f"WATT GETIR HATASI ({cihaz_tag}): {e}")
+        return 0.0
 
-                  // Anlık Güç Kartı → Grafik sayfasına geçiş
-                  InkWell(
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const GrafikSayfasi(),
-                      ),
-                    ),
-                    child: Card(
-                      child: ListTile(
-                        leading: const Icon(Icons.electric_bolt,
-                            color: Colors.orange, size: 40),
-                        title: const Text("Toplam Tüketim"),
-                        subtitle: Text(
-                          anlikWatt,
-                          style: const TextStyle(
-                              fontSize: 24, fontWeight: FontWeight.bold),
-                        ),
-                        trailing: const Icon(Icons.show_chart,
-                            color: Colors.orange),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
 
-                  // Fatura Kartı
-                  Card(
-                    color: Colors.green.shade50,
-                    child: ListTile(
-                      leading: const Icon(Icons.account_balance_wallet,
-                          color: Colors.green, size: 40),
-                      title: const Text("Tahmini Aylık Fatura"),
-                      subtitle: Text(
-                        fatura,
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
+# ==========================================
+# 3. EV DURUMU ENDPOINTI
+# ==========================================
+@app.api_route("/ev-durumu", methods=["GET", "HEAD"])
+def get_ev_durumu():
+    client = get_influx_client()
+    query_api = client.query_api()
 
-                  // Cihaz Detayları Butonu
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                        minimumSize: const Size(double.infinity, 50)),
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const CihazTabloSayfasi(),
-                      ),
-                    ),
-                    icon: const Icon(Icons.list_alt),
-                    label: const Text("Tüm Cihaz Detaylarını Gör"),
-                  ),
-                ],
-              ),
-            ),
-    );
-  }
-}
+    query = f'''
+        from(bucket: "{INFLUX_BUCKET}")
+        |> range(start: -1m)
+        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+        |> filter(fn: (r) => r["_field"] == "guc" or r["_field"] == "guc_faktoru")
+        |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
+        |> sort(columns: ["_time"])
+    '''
+    try:
+        results = query_api.query(org=INFLUX_ORG, query=query)
+        guc_noktalari = []
+        pf_noktalari  = []
+        anlik_watt    = 0.0
+        is_alive      = False
 
-// ==========================================
-// GRAFİK SAYFASI
-// DÜZELTME 4: Artık tüm cihazlar ayrı renklerle gösteriliyor.
-// X ekseninde gerçek saat:dakika bilgisi var.
-// Hata durumunda boş ekran yerine açıklayıcı mesaj çıkıyor.
-// ==========================================
-class GrafikSayfasi extends StatefulWidget {
-  const GrafikSayfasi({super.key});
+        for table in results:
+            for record in table.records:
+                val   = record.get_value() or 0.0
+                field = record.get_field()
 
-  @override
-  State<GrafikSayfasi> createState() => _GrafikSayfasiState();
-}
+                if field == "guc":
+                    guc_noktalari.append(val)
+                    anlik_watt = val
+                elif field == "guc_faktoru":
+                    pf_noktalari.append(val)
 
-class _GrafikSayfasiState extends State<GrafikSayfasi> {
-  List<dynamic> veri = [];
-  bool yukleniyor = true;
-  String hata = "";
-  int seciliSaat = 1;
+                gecen_sure = (datetime.now(timezone.utc) - record.get_time()).total_seconds()
+                if gecen_sure < 120:
+                    is_alive = True
 
-  Future<void> verileriGetir(int saat) async {
-    setState(() {
-      yukleniyor = true;
-      hata = "";
-    });
-    try {
-      final response = await http
-          .get(Uri.parse('$apiBaseUrl/enerji-gecmisi?saat=$saat'))
-          .timeout(const Duration(seconds: 60));
+        aktif_cihaz    = tahmin_et(guc_noktalari, pf_noktalari)
+        aylik_kwh      = gercek_aylik_kwh_hesapla(client)
+        tahmini_fatura = fatura_hesapla(aylik_kwh)
 
-      if (response.statusCode == 200) {
-        setState(() {
-          veri = jsonDecode(response.body);
-          yukleniyor = false;
-        });
-      } else {
-        setState(() {
-          hata = "Sunucu hatası: ${response.statusCode}";
-          yukleniyor = false;
-        });
-      }
-    } catch (e) {
-      setState(() {
-        hata = "Veri alınamadı: $e";
-        yukleniyor = false;
-      });
-    }
-  }
+        return {
+            "durum":             "Basarili" if is_alive else "Cevrimdisi",
+            "tahmini_fatura":    f"{tahmini_fatura} TL",
+            "aylik_tuketim_kwh": f"{aylik_kwh}",
+            "anlik_toplam_watt": f"{round(anlik_watt, 1)} W",
+            "aktif_cihaz":       aktif_cihaz
+        }
+    except Exception as e:
+        return {"durum": "Hata", "mesaj": str(e)}
+    finally:
+        client.close()
 
-  @override
-  void initState() {
-    super.initState();
-    verileriGetir(seciliSaat);
-  }
 
-  List<FlSpot> _spotsOlustur(String alan) {
-    List<FlSpot> spots = [];
-    for (int i = 0; i < veri.length; i++) {
-      final deger = (veri[i][alan] ?? 0).toDouble();
-      spots.add(FlSpot(i.toDouble(), deger));
-    }
-    return spots;
-  }
+# ==========================================
+# 4. CIHAZ DETAYLARI ENDPOINTI
+# ==========================================
+@app.api_route("/cihaz-detaylari", methods=["GET", "HEAD"])
+def get_cihaz_detaylari():
+    cihazlar = [
+        {"ad": "Ana Sayac (ESP32)", "tag": "ana_sayac", "ikon": "electric_meter"},
+        {"ad": "Buzdolabi",         "tag": "buzdolabi", "ikon": "kitchen"},
+        {"ad": "Seyyar Priz",       "tag": "utu",       "ikon": "power"},
+    ]
 
-  String _zamanEtiketi(int index) {
-    if (index < 0 || index >= veri.length) return "";
-    final zaman = DateTime.tryParse(veri[index]['zaman'] ?? "");
-    if (zaman == null) return "";
-    return "${zaman.hour.toString().padLeft(2, '0')}:${zaman.minute.toString().padLeft(2, '0')}";
-  }
+    client = get_influx_client()
+    try:
+        sonuclar = []
+        for cihaz in cihazlar:
+            watt       = son_watt_getir(client, cihaz["tag"])
+            saatlik_tl = watt_to_saatlik_tl(watt)
+            durum      = "Aktif" if watt > 5 else "Bekleme"
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("Tüketim Analizi")),
-      body: Column(
-        children: [
-          // Zaman aralığı seçici
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [1, 6, 24, 72].map((saat) {
-                final secili = saat == seciliSaat;
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: ChoiceChip(
-                    label: Text(saat < 24 ? "${saat}s" : "${saat ~/ 24}g"),
-                    selected: secili,
-                    onSelected: (_) {
-                      setState(() => seciliSaat = saat);
-                      verileriGetir(saat);
-                    },
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
+            sonuclar.append({
+                "cihaz":           cihaz["ad"],
+                "ikon":            cihaz["ikon"],
+                "anlik_watt":      f"{watt} W",
+                "saatlik_maliyet": f"{saatlik_tl} TL/saat",
+                "durum":           durum
+            })
 
-          // Grafik veya durum mesajı
-          Expanded(
-            child: yukleniyor
-                ? const Center(child: CircularProgressIndicator())
-                : hata.isNotEmpty
-                    ? Center(
-                        child: Text(hata,
-                            style: const TextStyle(color: Colors.red)))
-                    : veri.isEmpty
-                        ? const Center(child: Text("Bu aralıkta veri yok."))
-                        : Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: LineChart(
-                              LineChartData(
-                                lineBarsData: [
-                                  // Ana Sayaç
-                                  LineChartBarData(
-                                    spots: _spotsOlustur("esp32_ana"),
-                                    isCurved: true,
-                                    color: Colors.blue,
-                                    barWidth: 2,
-                                    dotData: const FlDotData(show: false),
-                                    belowBarData: BarAreaData(
-                                      show: true,
-                                      color: Colors.blue.withOpacity(0.08),
-                                    ),
-                                  ),
-                                  // Buzdolabı
-                                  LineChartBarData(
-                                    spots: _spotsOlustur("buzdolabi"),
-                                    isCurved: true,
-                                    color: Colors.teal,
-                                    barWidth: 2,
-                                    dotData: const FlDotData(show: false),
-                                  ),
-                                  // Seyyar Priz
-                                  LineChartBarData(
-                                    spots: _spotsOlustur("seyyar_priz"),
-                                    isCurved: true,
-                                    color: Colors.purple,
-                                    barWidth: 2,
-                                    dotData: const FlDotData(show: false),
-                                  ),
-                                ],
-                                titlesData: FlTitlesData(
-                                  bottomTitles: AxisTitles(
-                                    sideTitles: SideTitles(
-                                      showTitles: true,
-                                      interval: (veri.length / 4)
-                                          .clamp(1, double.infinity),
-                                      getTitlesWidget: (value, meta) {
-                                        return Text(
-                                          _zamanEtiketi(value.toInt()),
-                                          style:
-                                              const TextStyle(fontSize: 10),
-                                        );
-                                      },
-                                    ),
-                                  ),
-                                  leftTitles: AxisTitles(
-                                    sideTitles: SideTitles(
-                                      showTitles: true,
-                                      reservedSize: 40,
-                                      getTitlesWidget: (value, meta) =>
-                                          Text("${value.toInt()}W",
-                                              style: const TextStyle(
-                                                  fontSize: 10)),
-                                    ),
-                                  ),
-                                  topTitles: const AxisTitles(
-                                      sideTitles:
-                                          SideTitles(showTitles: false)),
-                                  rightTitles: const AxisTitles(
-                                      sideTitles:
-                                          SideTitles(showTitles: false)),
-                                ),
-                                gridData: const FlGridData(show: true),
-                                borderData: FlBorderData(show: true),
-                                minY: 0,
-                                maxY: 1500,
-                                clipData: const FlClipData.all()
-                              ),
-                            ),
-                          ),
-          ),
+        return sonuclar
+    except Exception as e:
+        return [{"cihaz": "Hata", "mesaj": str(e)}]
+    finally:
+        client.close()
 
-          // Lejant
-          if (!yukleniyor && hata.isEmpty && veri.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
-                  _LejantItem(renk: Colors.blue, etiket: "Ana Sayaç"),
-                  SizedBox(width: 12),
-                  _LejantItem(renk: Colors.teal, etiket: "Buzdolabı"),
-                  SizedBox(width: 12),
-                  _LejantItem(renk: Colors.purple, etiket: "Seyyar"),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
 
-class _LejantItem extends StatelessWidget {
-  final Color renk;
-  final String etiket;
-  const _LejantItem({required this.renk, required this.etiket});
+# ==========================================
+# 5. ENERJI GECMISI ENDPOINTI
+# ==========================================
+@app.api_route("/enerji-gecmisi", methods=["GET", "HEAD"])
+def get_enerji_gecmisi(saat: int = 1):
+    client    = get_influx_client()
+    query_api = client.query_api()
 
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(width: 12, height: 12, color: renk),
-        const SizedBox(width: 4),
-        Text(etiket, style: const TextStyle(fontSize: 11)),
-      ],
-    );
-  }
-}
+    if saat <= 1:
+        pencere = "1m"
+    elif saat <= 24:
+        pencere = "5m"
+    else:
+        pencere = "1h"
 
-// ==========================================
-// CİHAZ TABLOSU SAYFASI
-// DÜZELTME 5: /cihaz-detaylari endpoint'i artık mevcut.
-// Hata durumunda boş ekran yerine açıklayıcı mesaj.
-// ==========================================
-class CihazTabloSayfasi extends StatefulWidget {
-  const CihazTabloSayfasi({super.key});
+    query = f'''
+        import "timezone"
+        option location = timezone.location(name: "Europe/Istanbul")
 
-  @override
-  State<CihazTabloSayfasi> createState() => _CihazTabloSayfasiState();
-}
+        from(bucket: "{INFLUX_BUCKET}")
+        |> range(start: -{saat}h)
+        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+        |> filter(fn: (r) => r["_field"] == "guc")
+        |> aggregateWindow(every: {pencere}, fn: mean, createEmpty: true)
+        |> filter(fn: (r) => r["_value"] < 3000)
+        |> fill(value: 0.0)
+    '''
 
-class _CihazTabloSayfasiState extends State<CihazTabloSayfasi> {
-  List<dynamic> cihazlar = [];
-  bool yukleniyor = true;
-  String hata = "";
+    try:
+        result   = query_api.query(org=INFLUX_ORG, query=query)
+        time_map = {}
 
-  @override
-  void initState() {
-    super.initState();
-    _verileriGetir();
-  }
+        for table in result:
+            for record in table.records:
+                time  = record.get_time().isoformat()
+                value = record.get_value() or 0.0
+                tag   = str(record.values.get("cihaz") or "").lower().strip()
 
-  Future<void> _verileriGetir() async {
-    setState(() {
-      yukleniyor = true;
-      hata = "";
-    });
-    try {
-      final response = await http
-          .get(Uri.parse('$apiBaseUrl/cihaz-detaylari'))
-          .timeout(const Duration(seconds: 60));
+                if time not in time_map:
+                    time_map[time] = {
+                        "ana_sayac":   0.0,
+                        "buzdolabi":   0.0,
+                        "utu":         0.0,
+                        "seyyar_priz": 0.0
+                    }
 
-      if (response.statusCode == 200) {
-        setState(() {
-          cihazlar = jsonDecode(response.body);
-          yukleniyor = false;
-        });
-      } else {
-        setState(() {
-          hata = "Sunucu hatası: ${response.statusCode}";
-          yukleniyor = false;
-        });
-      }
-    } catch (e) {
-      setState(() {
-        hata = "Veri alınamadı: $e";
-        yukleniyor = false;
-      });
-    }
-  }
+                if "ana" in tag or "esp" in tag:
+                    time_map[time]["ana_sayac"]   = round(value, 1)
+                elif "buz" in tag or "dolap" in tag:
+                    time_map[time]["buzdolabi"]   = round(value, 1)
+                elif "utu" in tag:
+                    time_map[time]["utu"]         = round(value, 1)
+                elif any(x in tag for x in ["seyyar", "camasir", "priz", "tv", "televizyon"]):
+                    time_map[time]["seyyar_priz"] = round(value, 1)
 
-  IconData _ikonSec(String ikonAdi) {
-    switch (ikonAdi) {
-      case "kitchen":
-        return Icons.kitchen;
-      case "electric_meter":
-        return Icons.electric_meter;
-      case "power":
-        return Icons.power;
-      default:
-        return Icons.devices;
-    }
-  }
+        final_list = [
+            {
+                "zaman":       time,
+                "buzdolabi":   devices["buzdolabi"],
+                "esp32_ana":   devices["ana_sayac"],
+                "utu":         devices["utu"],
+                "seyyar_priz": devices["seyyar_priz"]
+            }
+            for time, devices in time_map.items()
+        ]
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Cihaz Detayları"),
-        actions: [
-          IconButton(
-            onPressed: _verileriGetir,
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
-      ),
-      body: yukleniyor
-          ? const Center(child: CircularProgressIndicator())
-          : hata.isNotEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.error_outline,
-                          color: Colors.red, size: 48),
-                      const SizedBox(height: 12),
-                      Text(hata,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Colors.red)),
-                      const SizedBox(height: 12),
-                      ElevatedButton(
-                        onPressed: _verileriGetir,
-                        child: const Text("Tekrar Dene"),
-                      ),
-                    ],
-                  ),
-                )
-              : ListView.builder(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: cihazlar.length,
-                  itemBuilder: (context, i) {
-                    final item = cihazlar[i];
-                    final aktif = item['durum'] == "Aktif";
-                    return Card(
-                      margin: const EdgeInsets.symmetric(vertical: 6),
-                      child: ListTile(
-                        leading: Icon(
-                          _ikonSec(item['ikon'] ?? ""),
-                          color: aktif ? Colors.green : Colors.grey,
-                          size: 36,
-                        ),
-                        title: Text(
-                          item['cihaz'] ?? "",
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        subtitle: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text("⚡ ${item['anlik_watt'] ?? '0 W'}"),
-                            Text("💰 ${item['saatlik_maliyet'] ?? '0 TL/saat'}"),
-                          ],
-                        ),
-                        trailing: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: aktif
-                                ? Colors.green.shade100
-                                : Colors.grey.shade200,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            item['durum'] ?? "",
-                            style: TextStyle(
-                              color: aktif ? Colors.green.shade800 : Colors.grey,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                        isThreeLine: true,
-                      ),
-                    );
-                  },
-                ),
-    );
-  }
-}
+        final_list.sort(key=lambda x: x["zaman"])
+        return final_list
+
+    except Exception as e:
+        print(f"GRAFIK HATASI: {e}")
+        return []
+    finally:
+        client.close()
+
+
+# ==========================================
+# 6. SAGLIK KONTROLU
+# ==========================================
+@app.api_route("/", methods=["GET", "HEAD"])
+def root():
+    return {"mesaj": "Akilli Ev NILM API calisiyor."}
+
+@app.api_route("/ping", methods=["GET", "HEAD"])
+def ping():
+    return {"status": "ok"}
+
+
+# ==========================================
+# 7. SUNUCU
+# ==========================================
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
