@@ -33,9 +33,6 @@ def get_influx_client():
 
 # ==========================================
 # 2. CNN-LSTM MODEL YUKLEME
-# Model dosyalari varsa yukle, yoksa kural tabanli calis
-# Model egitimi bitince nilm_model.keras, scaler.pkl,
-# label_encoder.pkl dosyalarini GitHub'a yukle — otomatik gececek
 # ==========================================
 MODEL_HAZIR = False
 model  = None
@@ -66,7 +63,7 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
     if not guc_verileri:
         return "Veri Bekleniyor..."
 
-    # Model varsa CNN-LSTM ile tahmin yap
+    
     if MODEL_HAZIR and len(guc_verileri) >= 30:
         try:
             pencere = np.array([
@@ -79,7 +76,6 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
         except Exception as e:
             print(f"Model tahmin hatasi: {e}")
 
-    # Model yoksa veya hata varsa kural tabanli calis
     son_watt = guc_verileri[-1]
     son_pf   = pf_verileri[-1] if pf_verileri else 1.0
 
