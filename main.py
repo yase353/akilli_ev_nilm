@@ -227,6 +227,7 @@ def get_enerji_gecmisi(saat: int = 1):
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
         |> aggregateWindow(every: {pencere}, fn: mean, createEmpty: true)
+        |> filter(fn: (r) => r["_value"] < 3000)
         |> fill(value: 0.0)
     '''
 
