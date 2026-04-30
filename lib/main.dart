@@ -491,6 +491,9 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
                                 ),
                                 gridData: const FlGridData(show: true),
                                 borderData: FlBorderData(show: true),
+                                minY: 0,
+                                maxY: 3000,
+                                clipData: const FlClipData.all()
                               ),
                             ),
                           ),
