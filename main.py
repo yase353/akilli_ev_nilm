@@ -19,7 +19,7 @@ app.add_middleware(
 )
 
 INFLUX_URL    = os.environ.get("INFLUX_URL",    "https://eu-central-1-1.aws.cloud2.influxdata.com")
-INFLUX_TOKEN  = os.environ.get("INFLUX_TOKEN",  "Ce_D58Wv76g1kf0Qx9oqIiGZ-CTHIYUIfGnOAHH7bw3UmXie7F6yXfZyn6rlKU-EA0wm0YT7KloeF-ptcYD6bw==")
+INFLUX_TOKEN  = os.environ.get("INFLUX_TOKEN",  "lKqY99OQLSaA_HNKGPF_JLYCfWv6Ha8emg4Fy-aTJR8xZjkTKRWbxCu96ZZHYRpL-6ZNtwwh2WlGfY3GUZspBA==")
 INFLUX_ORG    = os.environ.get("INFLUX_ORG",    "2a22ab52153e142d")
 INFLUX_BUCKET = os.environ.get("INFLUX_BUCKET", "tez_verileri")
 
