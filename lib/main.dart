@@ -545,11 +545,23 @@ class _CihazTabloSayfasiState extends State<CihazTabloSayfasi> {
   List<dynamic> cihazlar = [];
   bool yukleniyor = true;
   String hata = "";
+  Timer? _timer;
 
   @override
   void initState() {
     super.initState();
     _verileriGetir();
+    // Her 5 saniyede bir otomatik yenile
+    _timer = Timer.periodic(
+      const Duration(seconds: 5),
+      (timer) => _verileriGetir(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
   }
 
   Future<void> _verileriGetir() async {
