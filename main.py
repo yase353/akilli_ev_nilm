@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from influxdb_client import InfluxDBClient
 import uvicorn
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import os
 import pickle
 
@@ -50,7 +50,6 @@ try:
     print("CNN-LSTM modeli yuklendi ✓")
 except Exception as e:
     print(f"Model yuklenemedi, kural tabanli mod aktif: {e}")
-
 
 # ==========================================
 # 3. YARDIMCI FONKSİYONLAR
@@ -301,13 +300,16 @@ def get_enerji_gecmisi(saat: int = 1):
         |> fill(value: 0.0)
     '''
 
+    TURKEY_TZ = timezone(timedelta(hours=3))
+
     try:
         result   = query_api.query(org=INFLUX_ORG, query=query)
         time_map = {}
 
         for table in result:
             for record in table.records:
-                time  = record.get_time().isoformat()
+                # UTC zamanını Türkiye saatine çevir
+                time  = record.get_time().astimezone(TURKEY_TZ).strftime("%Y-%m-%dT%H:%M:%S")
                 value = record.get_value() or 0.0
                 tag   = str(record.values.get("cihaz") or "").lower().strip()
 
