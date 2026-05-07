@@ -114,8 +114,22 @@ def gercek_aylik_kwh_hesapla(client: InfluxDBClient) -> float:
             t0, w0 = kayitlar[i - 1]
             t1, w1 = kayitlar[i]
             sure_saat = (t1 - t0).total_seconds() / 3600.0
-            ort_watt  = (w0 + w1) / 2.0
+
+            # 10 dakikadan uzun boşlukları atla (veri kesintisi)
+            if sure_saat > (10 / 60):
+                continue
+
+            ort_watt = (w0 + w1) / 2.0
+
+            # Negatif watt değerlerini sıfırla
+            if ort_watt < 0:
+                ort_watt = 0.0
+
             toplam_wh += ort_watt * sure_saat
+
+        # Toplam negatif olmasını engelle
+        if toplam_wh < 0:
+            toplam_wh = 0.0
 
         return round(toplam_wh / 1000.0, 2)
     except Exception as e:
@@ -148,11 +162,6 @@ def son_watt_getir(client: InfluxDBClient, cihaz_tag: str) -> float:
         return 0.0
 
 def seyyar_watt_getir(client: InfluxDBClient) -> float:
-    """
-    ana_sayac ve buzdolabi disindaki her tag'i seyyar priz olarak alir.
-    Shelly'de isim ne olursa olsun (televizyon, utu, camasir_makinesi vb.)
-    main.py'de degisiklik yapmaya gerek kalmaz.
-    """
     query_api = client.query_api()
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
@@ -172,7 +181,6 @@ def seyyar_watt_getir(client: InfluxDBClient) -> float:
     except Exception as e:
         print(f"SEYYAR WATT HATASI: {e}")
         return 0.0
-
 
 # ==========================================
 # 4. EV DURUMU ENDPOINTI
