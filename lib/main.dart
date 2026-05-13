@@ -26,11 +26,6 @@ class AkilliEvApp extends StatelessWidget {
   }
 }
 
-// ==========================================
-// DÜZELTME 1: URL'de çift slash sorunu giderildi.
-// Sondaki '/' kaldırıldı; endpoint çağrılarında '$apiBaseUrl/ev-durumu' gibi
-// kullanılınca '.../ev-durumu' olacak (doğru).
-// ==========================================
 const String apiBaseUrl = "https://akilli-ev-nilm-9.onrender.com";
 
 // ==========================================
@@ -48,7 +43,6 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
   String anlikWatt = "0 W";
   String aktifCihaz = "Tespit Ediliyor...";
   String fatura = "0.0 TL";
-  // DÜZELTME 2: Yüklenme durumu başta true — ilk veri gelene kadar spinner göster
   bool yukleniyor = true;
   Timer? _timer;
 
@@ -102,10 +96,6 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
     super.dispose();
   }
 
-  // ==========================================
-  // DÜZELTME 3: CircularProgressIndicator artık sadece veri
-  // yüklenirken gösteriliyor; veri gelince duruyor.
-  // ==========================================
   Widget _buildAIPaneli() {
     IconData cihazIcon;
     Color iconColor;
@@ -166,7 +156,6 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
                 ],
               ),
             ),
-            // DÜZELTME 3: Sadece yüklenirken döner; veri gelince yeşil tik
             yukleniyor
                 ? const SizedBox(
                     width: 24,
@@ -205,7 +194,6 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
               padding: const EdgeInsets.all(16.0),
               child: Column(
                 children: [
-                  // Sistem Durum Şeridi
                   Container(
                     padding: const EdgeInsets.symmetric(
                         vertical: 8, horizontal: 16),
@@ -238,12 +226,8 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
                     ),
                   ),
                   const SizedBox(height: 20),
-
-                  // AI Paneli
                   _buildAIPaneli(),
                   const SizedBox(height: 20),
-
-                  // Anlık Güç Kartı → Grafik sayfasına geçiş
                   InkWell(
                     onTap: () => Navigator.push(
                       context,
@@ -267,8 +251,6 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
                     ),
                   ),
                   const SizedBox(height: 10),
-
-                  // Fatura Kartı
                   Card(
                     color: Colors.green.shade50,
                     child: ListTile(
@@ -286,8 +268,6 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
                     ),
                   ),
                   const SizedBox(height: 10),
-
-                  // Cihaz Detayları Butonu
                   ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
                         minimumSize: const Size(double.infinity, 50)),
@@ -309,9 +289,6 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
 
 // ==========================================
 // GRAFİK SAYFASI
-// DÜZELTME 4: Artık tüm cihazlar ayrı renklerle gösteriliyor.
-// X ekseninde gerçek saat:dakika bilgisi var.
-// Hata durumunda boş ekran yerine açıklayıcı mesaj çıkıyor.
 // ==========================================
 class GrafikSayfasi extends StatefulWidget {
   const GrafikSayfasi({super.key});
@@ -405,7 +382,7 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
             ),
           ),
 
-          // Grafik veya durum mesajı
+          // Grafik
           Expanded(
             child: yukleniyor
                 ? const Center(child: CircularProgressIndicator())
@@ -416,11 +393,39 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
                     : veri.isEmpty
                         ? const Center(child: Text("Bu aralıkta veri yok."))
                         : Padding(
-                            padding: const EdgeInsets.all(16),
+                            padding: const EdgeInsets.fromLTRB(8, 16, 16, 8),
                             child: LineChart(
                               LineChartData(
+                                lineTouchData: LineTouchData(
+                                  touchTooltipData: LineTouchTooltipData(
+                                    getTooltipItems: (touchedSpots) {
+                                      const etiketler = [
+                                        "Ana Sayaç",
+                                        "Buzdolabı",
+                                        "Seyyar"
+                                      ];
+                                      const renkler = [
+                                        Colors.blue,
+                                        Colors.teal,
+                                        Colors.purple
+                                      ];
+                                      return touchedSpots.map((spot) {
+                                        final idx = spot.barIndex;
+                                        return LineTooltipItem(
+                                          "${idx < etiketler.length ? etiketler[idx] : ''}\n${spot.y.toStringAsFixed(1)} W",
+                                          TextStyle(
+                                            color: idx < renkler.length
+                                                ? renkler[idx]
+                                                : Colors.white,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        );
+                                      }).toList();
+                                    },
+                                  ),
+                                ),
                                 lineBarsData: [
-                                  // Ana Sayaç
                                   LineChartBarData(
                                     spots: _spotsOlustur("esp32_ana"),
                                     isCurved: true,
@@ -432,7 +437,6 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
                                       color: Colors.blue.withOpacity(0.08),
                                     ),
                                   ),
-                                  // Buzdolabı
                                   LineChartBarData(
                                     spots: _spotsOlustur("buzdolabi"),
                                     isCurved: true,
@@ -440,7 +444,6 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
                                     barWidth: 2,
                                     dotData: const FlDotData(show: false),
                                   ),
-                                  // Seyyar Priz
                                   LineChartBarData(
                                     spots: _spotsOlustur("seyyar_priz"),
                                     isCurved: true,
@@ -453,13 +456,30 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
                                   bottomTitles: AxisTitles(
                                     sideTitles: SideTitles(
                                       showTitles: true,
-                                      interval: (veri.length / 4)
+                                      reservedSize: 32,
+                                      interval: (veri.length / 6)
                                           .clamp(1, double.infinity),
                                       getTitlesWidget: (value, meta) {
-                                        return Text(
-                                          _zamanEtiketi(value.toInt()),
-                                          style:
-                                              const TextStyle(fontSize: 10),
+                                        final index = value.toInt();
+                                        if (index < 0 ||
+                                            index >= veri.length) {
+                                          return const SizedBox();
+                                        }
+                                        final zaman = DateTime.tryParse(
+                                            veri[index]['zaman'] ?? "");
+                                        if (zaman == null) {
+                                          return const SizedBox();
+                                        }
+                                        return Padding(
+                                          padding: const EdgeInsets.only(
+                                              top: 8),
+                                          child: Text(
+                                            "${zaman.hour.toString().padLeft(2, '0')}:${zaman.minute.toString().padLeft(2, '0')}",
+                                            style: const TextStyle(
+                                              fontSize: 10,
+                                              color: Colors.black54,
+                                            ),
+                                          ),
                                         );
                                       },
                                     ),
@@ -467,11 +487,12 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
                                   leftTitles: AxisTitles(
                                     sideTitles: SideTitles(
                                       showTitles: true,
-                                      reservedSize: 40,
-                                      getTitlesWidget: (value, meta) =>
-                                          Text("${value.toInt()}W",
-                                              style: const TextStyle(
-                                                  fontSize: 10)),
+                                      reservedSize: 44,
+                                      getTitlesWidget: (value, meta) => Text(
+                                        "${value.toInt()}W",
+                                        style:
+                                            const TextStyle(fontSize: 10),
+                                      ),
                                     ),
                                   ),
                                   topTitles: const AxisTitles(
@@ -485,7 +506,7 @@ class _GrafikSayfasiState extends State<GrafikSayfasi> {
                                 borderData: FlBorderData(show: true),
                                 minY: 0,
                                 maxY: 1500,
-                                clipData: const FlClipData.all()
+                                clipData: const FlClipData.all(),
                               ),
                             ),
                           ),
@@ -531,8 +552,6 @@ class _LejantItem extends StatelessWidget {
 
 // ==========================================
 // CİHAZ TABLOSU SAYFASI
-// DÜZELTME 5: /cihaz-detaylari endpoint'i artık mevcut.
-// Hata durumunda boş ekran yerine açıklayıcı mesaj.
 // ==========================================
 class CihazTabloSayfasi extends StatefulWidget {
   const CihazTabloSayfasi({super.key});
@@ -551,7 +570,6 @@ class _CihazTabloSayfasiState extends State<CihazTabloSayfasi> {
   void initState() {
     super.initState();
     _verileriGetir();
-    // Her 5 saniyede bir otomatik yenile
     _timer = Timer.periodic(
       const Duration(seconds: 5),
       (timer) => _verileriGetir(),
@@ -661,7 +679,8 @@ class _CihazTabloSayfasiState extends State<CihazTabloSayfasi> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text("⚡ ${item['anlik_watt'] ?? '0 W'}"),
-                            Text("💰 ${item['saatlik_maliyet'] ?? '0 TL/saat'}"),
+                            Text(
+                                "💰 ${item['saatlik_maliyet'] ?? '0 TL/saat'}"),
                           ],
                         ),
                         trailing: Container(
@@ -676,7 +695,9 @@ class _CihazTabloSayfasiState extends State<CihazTabloSayfasi> {
                           child: Text(
                             item['durum'] ?? "",
                             style: TextStyle(
-                              color: aktif ? Colors.green.shade800 : Colors.grey,
+                              color: aktif
+                                  ? Colors.green.shade800
+                                  : Colors.grey,
                               fontWeight: FontWeight.bold,
                               fontSize: 12,
                             ),
