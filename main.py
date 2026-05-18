@@ -24,8 +24,8 @@ INFLUX_TOKEN  = os.environ.get("INFLUX_TOKEN",  "")
 INFLUX_ORG    = os.environ.get("INFLUX_ORG",    "2a22ab52153e142d")
 INFLUX_BUCKET = os.environ.get("INFLUX_BUCKET", "tez_verileri")
 
-FIYAT_DUSUK  = 2.07
-FIYAT_YUKSEK = 3.10
+FIYAT_DUSUK  = 2.59
+FIYAT_YUKSEK = 3.89
 
 def get_influx_client():
     return InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
