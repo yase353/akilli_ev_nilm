@@ -77,27 +77,33 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
         except Exception as e:
             print(f"Model tahmin hatasi: {e}")
 
-    # Kural tabanlı
-    if son_watt < 5:
-        return "Bosta"
-    elif son_watt > 1500:
-        return "Camasir Makinesi"
-    elif 1000 < son_watt <= 1500 and son_pf > 0.90:
-        return "Firin"
-    elif 800 < son_watt <= 1000 and son_pf > 0.90:
-        return "Sac Kurutma"
-    elif 600 < son_watt <= 800 and son_pf > 0.90:
-        return "Utu"
-    elif 300 <= son_watt <= 600 and son_pf < 0.82:
-        return "Camasir Makinesi"
+    # Kural tabanlı — çoklu cihaz tespiti
+    aktif = []
+
+    # Buzdolabı her zaman çalışıyor — düşük watt bile olsa ekle
+    if son_watt >= 5:
+        aktif.append("Buzdolabi")
+
+    # Yüksek güçlü cihazlar
+    if son_watt > 1500:
+        aktif = ["Camasir Makinesi (Isitma)", "Buzdolabi"]
+    elif 300 <= son_watt <= 1500 and son_pf < 0.82:
+        if "Buzdolabi" not in aktif:
+            aktif.append("Buzdolabi")
+        aktif.append("Camasir Makinesi")
+    elif son_watt > 1000 and son_pf > 0.90:
+        aktif.append("Firin")
+    elif son_watt > 800 and son_pf > 0.90:
+        aktif.append("Sac Kurutma")
+    elif son_watt > 600 and son_pf > 0.90:
+        aktif.append("Utu")
     elif son_watt < 200 and son_pf < 0.75:
-        return "Televizyon"
-    elif son_watt <= 150:
-        return "Buzdolabi"
-    elif son_watt > 150:
-        return "Genel Tuketim"
-    else:
-        return "Buzdolabi"
+        aktif = ["Televizyon", "Buzdolabi"]
+
+    if not aktif:
+        return "Bosta"
+
+    return " + ".join(aktif)
 
 def gercek_aylik_kwh_hesapla(client: InfluxDBClient) -> float:
     query_api = client.query_api()
