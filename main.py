@@ -62,7 +62,9 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
     if not guc_verileri:
         return "Veri Bekleniyor..."
 
-    
+    son_watt = guc_verileri[-1]
+    son_pf   = pf_verileri[-1] if pf_verileri else 1.0
+
     if MODEL_HAZIR and len(guc_verileri) >= 30:
         try:
             pencere = np.array([
@@ -75,19 +77,23 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
         except Exception as e:
             print(f"Model tahmin hatasi: {e}")
 
-    son_watt = guc_verileri[-1]
-    son_pf   = pf_verileri[-1] if pf_verileri else 1.0
-
-    if son_watt < 15:
+    # Kural tabanlı — güncellendi
+    if son_watt < 20:
         return "Bosta"
-    elif son_watt < 500 and son_pf > 0.95:
-        return "Utu"
-    elif son_watt < 200 and son_pf < 0.85:
-        return "Televizyon"
-    elif son_watt > 200 and son_pf < 0.80:
+    elif son_watt > 1500:
         return "Camasir Makinesi"
+    elif son_watt > 1000 and son_pf > 0.90:
+        return "Firin"
+    elif son_watt > 800 and son_pf > 0.90:
+        return "Sac Kurutma"
+    elif son_watt > 600 and son_pf > 0.90:
+        return "Utu"
+    elif son_watt < 200 and son_pf < 0.75:
+        return "Televizyon"
+    elif 80 <= son_watt <= 150 and 0.65 <= son_pf <= 0.82:
+        return "Buzdolabi"
     else:
-        return "Bilinmiyor"
+        return "Bosta"
 
 def gercek_aylik_kwh_hesapla(client: InfluxDBClient) -> float:
     query_api = client.query_api()
