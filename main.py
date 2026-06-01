@@ -77,23 +77,27 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
         except Exception as e:
             print(f"Model tahmin hatasi: {e}")
 
-    # Kural tabanlı — güncellendi
-    if son_watt < 20:
+    # Kural tabanlı
+    if son_watt < 5:
         return "Bosta"
     elif son_watt > 1500:
         return "Camasir Makinesi"
-    elif son_watt > 1000 and son_pf > 0.90:
+    elif 1000 < son_watt <= 1500 and son_pf > 0.90:
         return "Firin"
-    elif son_watt > 800 and son_pf > 0.90:
+    elif 800 < son_watt <= 1000 and son_pf > 0.90:
         return "Sac Kurutma"
-    elif son_watt > 600 and son_pf > 0.90:
+    elif 600 < son_watt <= 800 and son_pf > 0.90:
         return "Utu"
+    elif 300 <= son_watt <= 600 and son_pf < 0.82:
+        return "Camasir Makinesi"
     elif son_watt < 200 and son_pf < 0.75:
         return "Televizyon"
-    elif 80 <= son_watt <= 150 and 0.65 <= son_pf <= 0.82:
+    elif son_watt <= 150:
         return "Buzdolabi"
+    elif son_watt > 150:
+        return "Genel Tuketim"
     else:
-        return "Bosta"
+        return "Buzdolabi"
 
 def gercek_aylik_kwh_hesapla(client: InfluxDBClient) -> float:
     query_api = client.query_api()
