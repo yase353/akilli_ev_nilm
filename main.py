@@ -24,8 +24,11 @@ INFLUX_TOKEN  = os.environ.get("INFLUX_TOKEN",  "")
 INFLUX_ORG    = os.environ.get("INFLUX_ORG",    "2a22ab52153e142d")
 INFLUX_BUCKET = os.environ.get("INFLUX_BUCKET", "tez_verileri")
 
-FIYAT_DUSUK  = 2.59
-FIYAT_YUKSEK = 3.89
+AKTIF_DUSUK  = 2.92
+AKTIF_YUKSEK = 4.38
+DAGITIM      = 1.84
+KDV_ORAN     = 0.01
+BTV_ORAN     = 0.05
 
 def get_influx_client():
     return InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
@@ -54,9 +57,26 @@ except Exception as e:
 # ==========================================
 # 3. YARDIMCI FONKSİYONLAR
 # ==========================================
+def _fatura_hesapla_kwh(kwh: float) -> float:
+    """Verilen kWh için TL hesaplar (aktif + dağıtım + vergiler dahil)."""
+    if kwh <= 0:
+        return 0.0
+    aktif   = min(kwh, 240) * AKTIF_DUSUK + max(0.0, kwh - 240) * AKTIF_YUKSEK
+    dagitim = kwh * DAGITIM
+    ara     = aktif + dagitim
+    btv     = aktif * BTV_ORAN   # BTV yalnızca aktif enerji üzerinden
+    kdv     = (ara + btv) * KDV_ORAN
+    return round(ara + btv + kdv, 2)
+
 def watt_to_saatlik_tl(watt: float) -> float:
-    kwh_saatlik = watt / 1000.0
-    return round(kwh_saatlik * FIYAT_DUSUK, 4)
+    """Anlık watt değerinden saatlik TL maliyeti hesaplar (tüm kalemler dahil)."""
+    kwh = watt / 1000.0
+    aktif   = kwh * AKTIF_DUSUK   # anlık hesapta düşük kademe varsayılır
+    dagitim = kwh * DAGITIM
+    ara     = aktif + dagitim
+    btv     = aktif * BTV_ORAN
+    kdv     = (ara + btv) * KDV_ORAN
+    return round(ara + btv + kdv, 4)
 
 def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
     if not guc_verileri:
@@ -80,11 +100,9 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
     # Kural tabanlı — çoklu cihaz tespiti
     aktif = []
 
-    # Buzdolabı her zaman çalışıyor — düşük watt bile olsa ekle
     if son_watt >= 5:
         aktif.append("Buzdolabi")
 
-    # Yüksek güçlü cihazlar
     if son_watt > 1500:
         aktif = ["Camasir Makinesi (Isitma)", "Buzdolabi"]
     elif 300 <= son_watt <= 1500 and son_pf < 0.82:
@@ -131,19 +149,16 @@ def gercek_aylik_kwh_hesapla(client: InfluxDBClient) -> float:
             t1, w1 = kayitlar[i]
             sure_saat = (t1 - t0).total_seconds() / 3600.0
 
-            # 10 dakikadan uzun boşlukları atla (veri kesintisi)
             if sure_saat > (10 / 60):
                 continue
 
             ort_watt = (w0 + w1) / 2.0
 
-            # Negatif watt değerlerini sıfırla
             if ort_watt < 0:
                 ort_watt = 0.0
 
             toplam_wh += ort_watt * sure_saat
 
-        # Toplam negatif olmasını engelle
         if toplam_wh < 0:
             toplam_wh = 0.0
 
@@ -153,9 +168,8 @@ def gercek_aylik_kwh_hesapla(client: InfluxDBClient) -> float:
         return 0.0
 
 def fatura_hesapla(aylik_kwh: float) -> float:
-    ilk_dilim    = min(aylik_kwh, 240) * FIYAT_DUSUK
-    ikinci_dilim = max(0.0, aylik_kwh - 240) * FIYAT_YUKSEK
-    return round(ilk_dilim + ikinci_dilim, 2)
+    """Aylık kWh'ten gerçek fatura hesaplar (aktif enerji + dağıtım + KDV + BTV)."""
+    return _fatura_hesapla_kwh(aylik_kwh)
 
 def son_watt_getir(client: InfluxDBClient, cihaz_tag: str) -> float:
     query_api = client.query_api()
