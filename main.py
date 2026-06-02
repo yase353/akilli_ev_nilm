@@ -324,7 +324,7 @@ def get_enerji_gecmisi():
     query_api = client.query_api()
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -15d)
+        |> range(start: -3d)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
         |> filter(fn: (r) => r["ev"] == "ev1")
