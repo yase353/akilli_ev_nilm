@@ -314,73 +314,84 @@ def get_cihaz_detaylari():
 # 6. ENERJI GECMISI ENDPOINTI
 # ==========================================
 @app.api_route("/enerji-gecmisi", methods=["GET", "HEAD"])
-def get_enerji_gecmisi(saat: int = 1):
+def get_enerji_gecmisi(saat: int = 24):
     client    = get_influx_client()
     query_api = client.query_api()
 
-    if saat <= 1:
-        pencere = "1m"
-    elif saat <= 24:
-        pencere = "5m"
-    else:
-        pencere = "1h"
-
     query = f'''
-        import "timezone"
-        option location = timezone.location(name: "Europe/Istanbul")
-
         from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -{saat}h)
+        |> range(start: -15d)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
-        |> aggregateWindow(every: {pencere}, fn: mean, createEmpty: true)
-        |> filter(fn: (r) => r["_value"] < 3000)
-        |> fill(value: 0.0)
+        |> filter(fn: (r) => r["ev"] == "ev1")
+        |> filter(fn: (r) =>
+               r["cihaz"] == "ana_sayac" or
+               r["cihaz"] == "buzdolabi" or
+               r["cihaz"] == "televizyon"
+        )
+        |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
     '''
 
     TURKEY_TZ = timezone(timedelta(hours=3))
 
     try:
-        result   = query_api.query(org=INFLUX_ORG, query=query)
-        time_map = {}
+        result = query_api.query(org=INFLUX_ORG, query=query)
+
+        # Her cihazın toplam kWh değerini hesapla
+        cihaz_wh = {
+            "ana_sayac":  0.0,
+            "buzdolabi":  0.0,
+            "televizyon": 0.0,
+        }
+
+        cihaz_sayac = {
+            "ana_sayac":  0,
+            "buzdolabi":  0,
+            "televizyon": 0,
+        }
 
         for table in result:
             for record in table.records:
-                # UTC zamanını Türkiye saatine çevir
-                time  = record.get_time().astimezone(TURKEY_TZ).strftime("%Y-%m-%dT%H:%M:%S")
-                value = record.get_value() or 0.0
                 tag   = str(record.values.get("cihaz") or "").lower().strip()
+                value = record.get_value() or 0.0
+                if tag in cihaz_wh:
+                    cihaz_wh[tag]    += value
+                    cihaz_sayac[tag] += 1
 
-                if time not in time_map:
-                    time_map[time] = {
-                        "ana_sayac":   0.0,
-                        "buzdolabi":   0.0,
-                        "seyyar_priz": 0.0
-                    }
+        # Watt ortalamasından kWh'e çevir (saatlik ortalama * saat sayısı / 1000)
+        def ort_kwh(tag):
+            if cihaz_sayac[tag] == 0:
+                return 0.0
+            ort_watt = cihaz_wh[tag] / cihaz_sayac[tag]
+            return round(ort_watt * cihaz_sayac[tag] / 1000.0, 2)
 
-                if "ana" in tag or "esp" in tag:
-                    time_map[time]["ana_sayac"]   = round(value, 1)
-                elif "buz" in tag or "dolap" in tag:
-                    time_map[time]["buzdolabi"]   = round(value, 1)
-                elif tag not in ["ana_sayac", "buzdolabi", ""]:
-                    time_map[time]["seyyar_priz"] = round(value, 1)
+        kwh_ana   = ort_kwh("ana_sayac")
+        kwh_buz   = ort_kwh("buzdolabi")
+        kwh_tv    = ort_kwh("televizyon")
 
-        final_list = [
-            {
-                "zaman":       time,
-                "buzdolabi":   devices["buzdolabi"],
-                "esp32_ana":   devices["ana_sayac"],
-                "seyyar_priz": devices["seyyar_priz"]
-            }
-            for time, devices in time_map.items()
-        ]
+        # Diğer = ana sayaç - bilinen cihazlar (negatif olmasın)
+        kwh_diger = max(0.0, round(kwh_ana - kwh_buz - kwh_tv, 2))
 
-        final_list.sort(key=lambda x: x["zaman"])
-        return final_list
+        toplam = kwh_ana if kwh_ana > 0 else (kwh_buz + kwh_tv + kwh_diger)
+
+        def yuzde(kwh):
+            if toplam == 0:
+                return 0.0
+            return round(kwh / toplam * 100, 1)
+
+        return {
+            "pasta": [
+                {"cihaz": "Buzdolabi",   "kwh": kwh_buz,   "yuzde": yuzde(kwh_buz)},
+                {"cihaz": "Televizyon",  "kwh": kwh_tv,    "yuzde": yuzde(kwh_tv)},
+                {"cihaz": "Diger",       "kwh": kwh_diger, "yuzde": yuzde(kwh_diger)},
+            ],
+            "toplam_kwh": kwh_ana,
+            "sure_gun":   15
+        }
 
     except Exception as e:
-        print(f"GRAFIK HATASI: {e}")
-        return []
+        print(f"ENERJİ GEÇMİŞİ HATASI: {e}")
+        return {"pasta": [], "toplam_kwh": 0.0, "sure_gun": 15}
     finally:
         client.close()
 
