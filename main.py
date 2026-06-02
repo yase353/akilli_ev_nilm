@@ -114,14 +114,19 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
         aktif.append("Sac Kurutma")
     elif son_watt > 600 and son_pf > 0.90:
         aktif.append("Utu")
-    elif son_pf < 0.78:
-        if "Buzdolabi" not in aktif:
-            aktif.append("Buzdolabi")
-        aktif.append("Televizyon")
+    else:
+        pass
+
+    # TV tespiti — watt ve PF birlikte kontrol et
+    # Buzdolabı zaten aktif listede, TV'nin katkısını ayrıca ekle
+    if 50 <= son_watt <= 300 and son_pf < 0.72:
+        if "Televizyon" not in aktif:
+            aktif.append("Televizyon")
 
     if not aktif:
         return "Bosta"
 
+    return " + ".join(aktif)
     return " + ".join(aktif)
 
 def kwh_bilgi_hesapla(client: InfluxDBClient) -> dict:
