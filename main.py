@@ -96,6 +96,7 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
         except Exception as e:
             print(f"Model tahmin hatasi: {e}")
 
+    # Kural tabanlı — çoklu cihaz tespiti
     aktif = []
 
     if son_watt >= 5:
@@ -114,9 +115,9 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
     elif son_watt > 600 and son_pf > 0.90:
         aktif.append("Utu")
     elif son_pf < 0.78:
-    if "Buzdolabi" not in aktif:
-        aktif.append("Buzdolabi")
-    aktif.append("Televizyon")
+        if "Buzdolabi" not in aktif:
+            aktif.append("Buzdolabi")
+        aktif.append("Televizyon")
 
     if not aktif:
         return "Bosta"
