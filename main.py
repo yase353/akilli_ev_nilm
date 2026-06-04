@@ -1,6 +1,7 @@
 import numpy as np
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from influxdb_client.client.write_api import SYNCHRONOUS
 from influxdb_client import InfluxDBClient
 import uvicorn
 from datetime import datetime, timezone, timedelta
@@ -468,7 +469,7 @@ def get_grafik_gecmisi(saat: int = 1):
 # ==========================================
 @app.api_route("/sentetik-uret", methods=["GET", "HEAD"])
 def sentetik_uret():
-    import numpy as np
+
     from datetime import datetime, timezone
 
     client    = get_influx_client()
