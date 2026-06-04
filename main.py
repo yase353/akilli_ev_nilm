@@ -576,12 +576,60 @@ def sentetik_uret():
             time=int(zaman.timestamp())
         )
 
+        # ---- EV1 Buzdolabı ----
+        buz_watt = g(130, 12) if faz < 10 else g(4, 1)
+        buz_watt = max(1, round(buz_watt, 1))
+        write_api.write(
+            bucket=INFLUX_BUCKET, org=INFLUX_ORG, write_precision="s",
+            record=f"gercek_tuketim,cihaz=buzdolabi,ev=ev1 "
+                   f"guc={buz_watt},voltaj={voltaj},"
+                   f"akim={round(buz_watt/voltaj,3)},frekans=50.0",
+            time=int(zaman.timestamp())
+        )
+
+        # ---- EV1 Televizyon ----
+        tv_watt = g(88, 6) if 19.0 <= saat < 23.0 else 0.0
+        if tv_watt > 1:
+            tv_watt = round(tv_watt, 1)
+            write_api.write(
+                bucket=INFLUX_BUCKET, org=INFLUX_ORG, write_precision="s",
+                record=f"gercek_tuketim,cihaz=televizyon,ev=ev1 "
+                       f"guc={tv_watt},voltaj={voltaj},"
+                       f"akim={round(tv_watt/voltaj,3)},frekans=50.0",
+                time=int(zaman.timestamp())
+            )
+
+        # ---- EV2 Buzdolabı ----
+        buz2_watt = g(125, 10) if faz < 10 else g(4, 1)
+        buz2_watt = max(1, round(buz2_watt, 1))
+        write_api.write(
+            bucket=INFLUX_BUCKET, org=INFLUX_ORG, write_precision="s",
+            record=f"gercek_tuketim,cihaz=buzdolabi,ev=ev2 "
+                   f"guc={buz2_watt},voltaj={voltaj},"
+                   f"akim={round(buz2_watt/voltaj,3)},frekans=50.0",
+            time=int(zaman.timestamp())
+        )
+
+        # ---- EV2 Televizyon ----
+        tv2_watt = g(88, 6) if 19.0 <= saat < 23.0 else 0.0
+        if tv2_watt > 1:
+            tv2_watt = round(tv2_watt, 1)
+            write_api.write(
+                bucket=INFLUX_BUCKET, org=INFLUX_ORG, write_precision="s",
+                record=f"gercek_tuketim,cihaz=televizyon,ev=ev2 "
+                       f"guc={tv2_watt},voltaj={voltaj},"
+                       f"akim={round(tv2_watt/voltaj,3)},frekans=50.0",
+                time=int(zaman.timestamp())
+            )
+
         client.close()
         return {
             "durum": "ok",
             "zaman": zaman.strftime("%Y-%m-%dT%H:%M:%S"),
-            "ev1_watt": watt_ev1,
-            "ev2_watt": watt_ev2,
+            "ev1_ana": watt_ev1,
+            "ev1_buz": buz_watt,
+            "ev2_ana": watt_ev2,
+            "ev2_buz": buz2_watt,
         }
 
     except Exception as e:
