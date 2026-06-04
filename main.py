@@ -127,7 +127,7 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
         return "Bosta"
 
     return " + ".join(aktif)
-    return " + ".join(aktif)
+    
 
 def kwh_bilgi_hesapla(client: InfluxDBClient) -> dict:
     """
@@ -463,7 +463,129 @@ def get_grafik_gecmisi(saat: int = 1):
     finally:
         client.close()
 
+# ==========================================
+# 8. SENTETİK VERİ ÜRETİMİ ENDPOINTI
+# ==========================================
+@app.api_route("/sentetik-uret", methods=["GET", "HEAD"])
+def sentetik_uret():
+    import numpy as np
+    from datetime import datetime, timezone
 
+    client    = get_influx_client()
+    write_api = client.write_api(write_options=SYNCHRONOUS)
+
+    try:
+        zaman  = datetime.now(timezone.utc)
+        saat   = zaman.hour + zaman.minute / 60.0
+        gun    = zaman.weekday()
+        voltaj = round(np.random.normal(228, 2.5), 1)
+
+        def g(mu, sigma):
+            return max(0.0, np.random.normal(mu, sigma))
+
+        # ---- EV1 ----
+        watt_ev1 = 30 + g(5, 2)
+
+        # Buzdolabı döngüsü
+        faz = (zaman.minute * 12 + zaman.second) % 60
+        buz_ev1 = g(130, 12) if faz < 10 else g(4, 1)
+        watt_ev1 += buz_ev1
+
+        # Çamaşır — Pazartesi, Çarşamba 09:00 ve 20:00
+        if gun in [0, 2]:
+            if 9.0 <= saat < 10.0:
+                watt_ev1 += g(2000, 80) if saat < 9.5 else g(400, 50)
+            if 20.0 <= saat < 21.0:
+                watt_ev1 += g(2000, 80) if saat < 20.5 else g(400, 50)
+
+        # Saç kurutma — her gün 07:30 ve 21:00
+        if 7.5 <= saat < 7.67 or 21.0 <= saat < 21.17:
+            watt_ev1 += g(1600, 60)
+
+        # Fırın — Pzt, Çrş, Cum 18:00
+        if gun in [0, 2, 4] and 18.0 <= saat < 18.6:
+            watt_ev1 += g(1800, 60)
+
+        # Ütü — çamaşır günlerinde 14:00
+        if gun in [0, 2] and 14.0 <= saat < 15.0:
+            watt_ev1 += g(1100, 50)
+
+        # Süpürge — her gün 11:00
+        if 11.0 <= saat < 11.5:
+            watt_ev1 += g(900, 40)
+
+        # Aydınlatma
+        watt_ev1 += g(80, 15) if 18.0 <= saat < 23.0 else g(30, 8)
+
+        watt_ev1 = max(60, round(watt_ev1, 1))
+        pf_ev1   = round(np.random.uniform(0.78, 0.92), 2)
+        akim_ev1 = round(watt_ev1 / voltaj, 3)
+
+        write_api.write(
+            bucket=INFLUX_BUCKET, org=INFLUX_ORG, write_precision="s",
+            record=f"gercek_tuketim,cihaz=ana_sayac,ev=ev1 "
+                   f"guc={watt_ev1},voltaj={voltaj},akim={akim_ev1},"
+                   f"guc_faktoru={pf_ev1},frekans=50.0",
+            time=int(zaman.timestamp())
+        )
+
+        # ---- EV2 ----
+        watt_ev2 = 30 + g(5, 2)
+
+        buz_ev2 = g(125, 10) if faz < 10 else g(4, 1)
+        watt_ev2 += buz_ev2
+
+        # Çamaşır — her gün 09:00 ve 20:00
+        if 9.0 <= saat < 10.0:
+            watt_ev2 += g(2100, 80) if saat < 9.5 else g(420, 50)
+        if 20.0 <= saat < 21.0:
+            watt_ev2 += g(2100, 80) if saat < 20.5 else g(420, 50)
+
+        # Saç kurutma — her gün 07:30
+        if 7.5 <= saat < 7.67:
+            watt_ev2 += g(1650, 50)
+
+        # Fırın — Cuma 12:00, Pazar 11:00
+        if gun == 4 and 12.0 <= saat < 13.0:
+            watt_ev2 += g(1800, 60)
+        if gun == 6 and 11.0 <= saat < 12.5:
+            watt_ev2 += g(1800, 60)
+
+        # TV — her gün 19:00-23:00
+        tv_ev2 = g(88, 6) if 19.0 <= saat < 23.0 else 0.0
+        watt_ev2 += tv_ev2
+
+        # Ütü — Salı, Perşembe 14:00
+        if gun in [1, 3] and 14.0 <= saat < 15.0:
+            watt_ev2 += g(1150, 50)
+
+        # Süpürge — her gün 10:30
+        if 10.5 <= saat < 11.0:
+            watt_ev2 += g(900, 40)
+
+        watt_ev2 = max(60, round(watt_ev2, 1))
+        pf_ev2   = round(np.random.uniform(0.78, 0.92), 2)
+        akim_ev2 = round(watt_ev2 / voltaj, 3)
+
+        write_api.write(
+            bucket=INFLUX_BUCKET, org=INFLUX_ORG, write_precision="s",
+            record=f"gercek_tuketim,cihaz=ana_sayac,ev=ev2 "
+                   f"guc={watt_ev2},voltaj={voltaj},akim={akim_ev2},"
+                   f"guc_faktoru={pf_ev2},frekans=50.0",
+            time=int(zaman.timestamp())
+        )
+
+        client.close()
+        return {
+            "durum": "ok",
+            "zaman": zaman.strftime("%Y-%m-%dT%H:%M:%S"),
+            "ev1_watt": watt_ev1,
+            "ev2_watt": watt_ev2,
+        }
+
+    except Exception as e:
+        client.close()
+        return {"durum": "hata", "mesaj": str(e)}
 # ==========================================
 # 8. SAGLIK KONTROLU
 # ==========================================
