@@ -11,7 +11,7 @@ import pickle
 # ==========================================
 # 1. AYARLAR
 # ==========================================
-app = FastAPI(title="Akıllı Ev NILM - Back-End")
+app = FastAPI(title="Akilli Ev NILM - Back-End")
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,18 +42,7 @@ MODEL_HAZIR = False
 model  = None
 scaler = None
 le     = None
-
-try:
-    import tensorflow as tf
-    model = tf.keras.models.load_model("nilm_model.keras")
-    with open("scaler.pkl", "rb") as f:
-        scaler = pickle.load(f)
-    with open("label_encoder.pkl", "rb") as f:
-        le = pickle.load(f)
-    MODEL_HAZIR = True
-    print("CNN-LSTM modeli yuklendi")
-except Exception as e:
-    print(f"Model yuklenemedi, kural tabanli mod aktif: {e}")
+print("Kural tabanli mod aktif")
 
 
 # ==========================================
@@ -85,24 +74,14 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
     son_watt = guc_verileri[-1]
     son_pf   = pf_verileri[-1] if pf_verileri else 1.0
 
-    if MODEL_HAZIR and len(guc_verileri) >= 30:
-        try:
-            pencere = np.array([
-                [guc_verileri[i], pf_verileri[i] if i < len(pf_verileri) else 1.0]
-                for i in range(-30, 0)
-            ])
-            pencere_scaled = scaler.transform(pencere).reshape(1, 30, 2)
-            tahmin = model.predict(pencere_scaled, verbose=0)
-            return le.inverse_transform([np.argmax(tahmin)])[0]
-        except Exception as e:
-            print(f"Model tahmin hatasi: {e}")
-
     # Kural tabanlı — çoklu cihaz tespiti
     aktif = []
 
+    # Buzdolabı her zaman arka planda
     if son_watt >= 5:
         aktif.append("Buzdolabi")
 
+    # Yüksek güçlü cihazlar — elif zinciri
     if son_watt > 1500:
         aktif = ["Camasir Makinesi (Isitma)", "Buzdolabi"]
     elif 300 <= son_watt <= 1500 and son_pf < 0.82:
@@ -115,12 +94,10 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
         aktif.append("Sac Kurutma")
     elif son_watt > 600 and son_pf > 0.90:
         aktif.append("Utu")
-    else:
-        pass
 
-    # TV tespiti — watt ve PF birlikte kontrol et
-    # Buzdolabı zaten aktif listede, TV'nin katkısını ayrıca ekle
-    if 50 <= son_watt <= 300 and son_pf < 0.72:
+    # TV tespiti — bağımsız kontrol
+    # TV açıkken PF 0.62-0.75 arası, watt 60-300 arası
+    if son_pf < 0.78 and son_watt < 400 and son_watt > 50:
         if "Televizyon" not in aktif:
             aktif.append("Televizyon")
 
@@ -128,15 +105,8 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
         return "Bosta"
 
     return " + ".join(aktif)
-    
 
 def kwh_bilgi_hesapla(client: InfluxDBClient) -> dict:
-    """
-    Son 15 gunluk ana sayac verisinden:
-    - gercek_kwh   : toplam olculen kWh
-    - gunluk_ort   : gunluk ortalama kWh
-    - projeksiyon  : 30 gune projeksiyon kWh
-    """
     query_api = client.query_api()
     query = f'''
         from(bucket: "{INFLUX_BUCKET}")
@@ -144,7 +114,6 @@ def kwh_bilgi_hesapla(client: InfluxDBClient) -> dict:
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc")
         |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
-        |> filter(fn: (r) => r["ev"] == "ev1")
         |> sort(columns: ["_time"])
     '''
     bos = {"gercek_kwh": 0.0, "gunluk_ort": 0.0, "projeksiyon": 0.0}
@@ -241,6 +210,7 @@ def get_ev_durumu():
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
         |> filter(fn: (r) => r["_field"] == "guc" or r["_field"] == "guc_faktoru")
         |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
+        |> filter(fn: (r) => r["ev"] == "ev1")
         |> sort(columns: ["_time"])
     '''
     try:
@@ -325,7 +295,6 @@ def get_cihaz_detaylari():
 
 # ==========================================
 # 6. ENERJI GECMISI — PASTA GRAFIK
-# kWh bazli dagilim dondurur
 # ==========================================
 @app.api_route("/enerji-gecmisi", methods=["GET", "HEAD"])
 def get_enerji_gecmisi():
@@ -380,18 +349,17 @@ def get_enerji_gecmisi():
                 {"cihaz": "Diger",      "kwh": kwh_diger, "yuzde": yuzde(kwh_diger)},
             ],
             "toplam_kwh": kwh_ana,
-            "sure_gun":   15,
+            "sure_gun":   3,
         }
     except Exception as e:
         print(f"ENERJI GECMISI HATASI: {e}")
-        return {"pasta": [], "toplam_kwh": 0.0, "sure_gun": 15}
+        return {"pasta": [], "toplam_kwh": 0.0, "sure_gun": 3}
     finally:
         client.close()
 
 
 # ==========================================
 # 7. GRAFIK GECMISI — CIZGI GRAFIK
-# Flutter cizgi grafik sayfasi bu endpoint'i kullanir
 # ==========================================
 @app.api_route("/grafik-gecmisi", methods=["GET", "HEAD"])
 def get_grafik_gecmisi(saat: int = 1):
@@ -463,6 +431,7 @@ def get_grafik_gecmisi(saat: int = 1):
         return []
     finally:
         client.close()
+
 
 # ==========================================
 # 8. SAGLIK KONTROLU
