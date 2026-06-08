@@ -1,0 +1,28 @@
+name: Sentetik Veri Uretici
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # Her 5 dakikada bir
+  workflow_dispatch:          # Manuel tetikleme butonu
+
+jobs:
+  uret:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Repoyu indir
+        uses: actions/checkout@v4
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Kütüphaneleri yükle
+        run: pip install influxdb-client numpy
+
+      - name: Sentetik veri üret
+        env:
+          INFLUX_TOKEN: ${{ secrets.INFLUX_TOKEN }}
+        run: python sentetik_tek_nokta.py
