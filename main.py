@@ -46,7 +46,15 @@ print("Kural tabanli mod aktif")
 
 
 # ==========================================
-# 3. YARDIMCI FONKSIYONLAR
+# 3. KWH CACHE — 60 saniyede bir guncellenir
+# Her istekte 15 gunluk sorgu yerine cache'den donus yapar
+# Bu sayede /ev-durumu yanit suresi 1 saniyenin altina iner
+# ==========================================
+_kwh_cache = {"veri": None, "son_guncelleme": None}
+
+
+# ==========================================
+# 4. YARDIMCI FONKSIYONLAR
 # ==========================================
 def _fatura_hesapla_kwh(kwh: float) -> float:
     if kwh <= 0:
@@ -74,14 +82,11 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
     son_watt = guc_verileri[-1]
     son_pf   = pf_verileri[-1] if pf_verileri else 1.0
 
-    # Kural tabanlı — çoklu cihaz tespiti
     aktif = []
 
-    # Buzdolabı her zaman arka planda
     if son_watt >= 5:
         aktif.append("Buzdolabi")
 
-    # Yüksek güçlü cihazlar — elif zinciri
     if son_watt > 1500:
         aktif = ["Camasir Makinesi (Isitma)", "Buzdolabi"]
     elif 300 <= son_watt <= 1500 and son_pf < 0.82:
@@ -95,8 +100,6 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
     elif son_watt > 600 and son_pf > 0.90:
         aktif.append("Utu")
 
-    # TV tespiti — bağımsız kontrol
-    # TV açıkken PF 0.62-0.75 arası, watt 60-300 arası
     if son_pf < 0.78 and son_watt < 400 and son_watt > 50:
         if "Televizyon" not in aktif:
             aktif.append("Televizyon")
@@ -138,8 +141,8 @@ def kwh_bilgi_hesapla(client: InfluxDBClient) -> dict:
             toplam_wh += ort_watt * sure_saat
 
         gercek_kwh = round(max(toplam_wh, 0.0) / 1000.0, 2)
+        sure_gun   = (kayitlar[-1][0] - kayitlar[0][0]).total_seconds() / 86400.0
 
-        sure_gun = (kayitlar[-1][0] - kayitlar[0][0]).total_seconds() / 86400.0
         if sure_gun < 0.1:
             return {"gercek_kwh": gercek_kwh, "gunluk_ort": 0.0, "projeksiyon": 0.0}
 
@@ -154,6 +157,25 @@ def kwh_bilgi_hesapla(client: InfluxDBClient) -> dict:
     except Exception as e:
         print(f"KWH HESAP HATASI: {e}")
         return bos
+
+def kwh_bilgi_hesapla_cached(client: InfluxDBClient) -> dict:
+    """
+    15 gunluk kWh hesabini 60 saniyede bir yeniler.
+    Her /ev-durumu isteginde tekrar sorgu atmak yerine
+    cache'den doner — yanit suresini buyuk olcude dusuruyor.
+    """
+    global _kwh_cache
+    simdi = datetime.now(timezone.utc)
+    if (
+        _kwh_cache["veri"] is not None and
+        _kwh_cache["son_guncelleme"] is not None and
+        (simdi - _kwh_cache["son_guncelleme"]).total_seconds() < 60
+    ):
+        return _kwh_cache["veri"]
+    veri = kwh_bilgi_hesapla(client)
+    _kwh_cache["veri"]            = veri
+    _kwh_cache["son_guncelleme"]  = simdi
+    return veri
 
 def son_watt_getir(client: InfluxDBClient, cihaz_tag: str) -> float:
     query_api = client.query_api()
@@ -198,7 +220,7 @@ def seyyar_watt_getir(client: InfluxDBClient) -> float:
 
 
 # ==========================================
-# 4. EV DURUMU ENDPOINTI
+# 5. EV DURUMU ENDPOINTI
 # ==========================================
 @app.api_route("/ev-durumu", methods=["GET", "HEAD"])
 def get_ev_durumu():
@@ -234,7 +256,9 @@ def get_ev_durumu():
                     is_alive = True
 
         aktif_cihaz = tahmin_et(guc_noktalari, pf_noktalari)
-        kwh_bilgi   = kwh_bilgi_hesapla(client)
+
+        # Cache'li kWh hesabi — 60sn'de bir guncellenir
+        kwh_bilgi   = kwh_bilgi_hesapla_cached(client)
 
         gunluk_ort  = kwh_bilgi["gunluk_ort"]
         projeksiyon = kwh_bilgi["projeksiyon"]
@@ -255,7 +279,7 @@ def get_ev_durumu():
 
 
 # ==========================================
-# 5. CIHAZ DETAYLARI ENDPOINTI
+# 6. CIHAZ DETAYLARI ENDPOINTI
 # ==========================================
 @app.api_route("/cihaz-detaylari", methods=["GET", "HEAD"])
 def get_cihaz_detaylari():
@@ -294,7 +318,7 @@ def get_cihaz_detaylari():
 
 
 # ==========================================
-# 6. ENERJI GECMISI — PASTA GRAFIK
+# 7. ENERJI GECMISI — PASTA GRAFIK
 # ==========================================
 @app.api_route("/enerji-gecmisi", methods=["GET", "HEAD"])
 def get_enerji_gecmisi():
@@ -359,7 +383,7 @@ def get_enerji_gecmisi():
 
 
 # ==========================================
-# 7. GRAFIK GECMISI — CIZGI GRAFIK
+# 8. GRAFIK GECMISI — CIZGI GRAFIK
 # ==========================================
 @app.api_route("/grafik-gecmisi", methods=["GET", "HEAD"])
 def get_grafik_gecmisi(saat: int = 1):
@@ -434,7 +458,7 @@ def get_grafik_gecmisi(saat: int = 1):
 
 
 # ==========================================
-# 8. SAGLIK KONTROLU
+# 9. SAGLIK KONTROLU VE PING
 # ==========================================
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
@@ -446,7 +470,7 @@ def ping():
 
 
 # ==========================================
-# 9. SUNUCU
+# 10. SUNUCU
 # ==========================================
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
