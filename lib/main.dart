@@ -26,7 +26,7 @@ class AkilliEvApp extends StatelessWidget {
   }
 }
 
-const String apiBaseUrl = "https://akilli-ev-nilm-9.onrender.com";
+const String apiBaseUrl = "https://akilli-ev-nilm-zgcq.onrender.com";
 
 // ==========================================
 // ANA SAYFA
