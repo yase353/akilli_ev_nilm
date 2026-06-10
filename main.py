@@ -1,4 +1,3 @@
-import numpy as np
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from influxdb_client.client.write_api import SYNCHRONOUS
