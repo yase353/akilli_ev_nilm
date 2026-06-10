@@ -1,12 +1,11 @@
+import numpy as np
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from influxdb_client.client.write_api import SYNCHRONOUS
 from influxdb_client import InfluxDBClient
 import uvicorn
 from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 import os
-import pickle
 
 # ==========================================
 # 1. AYARLAR
@@ -27,30 +26,45 @@ def get_influx_client():
 
 
 # ==========================================
-# 2. CNN-LSTM MODEL YUKLEME
+# 2. CNN-LSTM MODEL
 # ==========================================
 MODEL_HAZIR = False
-model  = None
-scaler = None
-le     = None
+model = scaler = le = None
 print("Kural tabanli mod aktif")
 
 
 # ==========================================
-# 3. KWH CACHE — 60 saniyede bir guncellenir
+# 3. CACHE TANIMI
+# kwh     : 60  saniyede bir guncellenir
+# enerji  : 300 saniyede bir guncellenir (5dk — pasta grafik)
+# cihaz   : 30  saniyede bir guncellenir
 # ==========================================
-_kwh_cache = {"veri": None, "son_guncelleme": None}
+_kwh_cache    = {"veri": None, "son": None}
+_enerji_cache = {"veri": None, "son": None}
+_cihaz_cache  = {"veri": None, "son": None}
+
+def _cache_gecerli(cache: dict, sure_sn: int) -> bool:
+    return (
+        cache["veri"] is not None and
+        cache["son"]  is not None and
+        (datetime.now(timezone.utc) - cache["son"]).total_seconds() < sure_sn
+    )
+
+def _cache_guncelle(cache: dict, veri):
+    cache["veri"] = veri
+    cache["son"]  = datetime.now(timezone.utc)
 
 
 # ==========================================
-# 4. STARTUP — Render ayaga kalkinca cache doldur
-# Ilk Flutter istegi de hizli gelir
+# 4. STARTUP — cache'i on
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         client = get_influx_client()
-        kwh_bilgi_hesapla_cached(client)
+        _cache_guncelle(_kwh_cache,   kwh_bilgi_hesapla(client))
+        _cache_guncelle(_enerji_cache, enerji_gecmisi_hesapla(client))
+        _cache_guncelle(_cihaz_cache,  cihaz_detaylari_hesapla(client))
         client.close()
         print("Startup cache dolduruldu")
     except Exception as e:
@@ -59,10 +73,9 @@ async def lifespan(app: FastAPI):
 
 
 # ==========================================
-# 5. APP TANIMI
+# 5. APP
 # ==========================================
 app = FastAPI(title="Akilli Ev NILM - Back-End", lifespan=lifespan)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -96,15 +109,11 @@ def watt_to_saatlik_tl(watt: float) -> float:
 def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
     if not guc_verileri:
         return "Veri Bekleniyor..."
-
     son_watt = guc_verileri[-1]
     son_pf   = pf_verileri[-1] if pf_verileri else 1.0
-
-    aktif = []
-
+    aktif    = []
     if son_watt >= 5:
         aktif.append("Buzdolabi")
-
     if son_watt > 1500:
         aktif = ["Camasir Makinesi (Isitma)", "Buzdolabi"]
     elif 300 <= son_watt <= 1500 and son_pf < 0.82:
@@ -117,123 +126,153 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
         aktif.append("Sac Kurutma")
     elif son_watt > 600 and son_pf > 0.90:
         aktif.append("Utu")
-
     if son_pf < 0.78 and son_watt < 400 and son_watt > 50:
         if "Televizyon" not in aktif:
             aktif.append("Televizyon")
-
-    if not aktif:
-        return "Bosta"
-
-    return " + ".join(aktif)
+    return " + ".join(aktif) if aktif else "Bosta"
 
 def kwh_bilgi_hesapla(client: InfluxDBClient) -> dict:
-    query_api = client.query_api()
-    query = f'''
-        from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -15d)
-        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
-        |> filter(fn: (r) => r["_field"] == "guc")
-        |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
-        |> sort(columns: ["_time"])
-    '''
     bos = {"gercek_kwh": 0.0, "gunluk_ort": 0.0, "projeksiyon": 0.0}
     try:
-        result   = query_api.query(org=INFLUX_ORG, query=query)
-        kayitlar = []
-        for table in result:
-            for record in table.records:
-                kayitlar.append((record.get_time(), record.get_value() or 0.0))
-
+        query = f'''
+            from(bucket: "{INFLUX_BUCKET}")
+            |> range(start: -15d)
+            |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+            |> filter(fn: (r) => r["_field"] == "guc")
+            |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
+            |> sort(columns: ["_time"])
+        '''
+        result   = client.query_api().query(org=INFLUX_ORG, query=query)
+        kayitlar = [(r.get_time(), r.get_value() or 0.0)
+                    for t in result for r in t.records]
         if len(kayitlar) < 2:
             return bos
-
         toplam_wh = 0.0
         for i in range(1, len(kayitlar)):
-            t0, w0 = kayitlar[i - 1]
-            t1, w1 = kayitlar[i]
-            sure_saat = (t1 - t0).total_seconds() / 3600.0
-            if sure_saat > (10 / 60):
-                continue
-            ort_watt = max((w0 + w1) / 2.0, 0.0)
-            toplam_wh += ort_watt * sure_saat
-
-        gercek_kwh = round(max(toplam_wh, 0.0) / 1000.0, 2)
-        sure_gun   = (kayitlar[-1][0] - kayitlar[0][0]).total_seconds() / 86400.0
-
+            t0, w0 = kayitlar[i-1]; t1, w1 = kayitlar[i]
+            sure = (t1-t0).total_seconds() / 3600.0
+            if sure <= 10/60:
+                toplam_wh += max((w0+w1)/2, 0.0) * sure
+        gercek_kwh = round(toplam_wh / 1000.0, 2)
+        sure_gun   = (kayitlar[-1][0]-kayitlar[0][0]).total_seconds() / 86400.0
         if sure_gun < 0.1:
             return {"gercek_kwh": gercek_kwh, "gunluk_ort": 0.0, "projeksiyon": 0.0}
-
         gunluk_ort  = round(gercek_kwh / sure_gun, 2)
         projeksiyon = round(gunluk_ort * 30, 2)
-
-        return {
-            "gercek_kwh": gercek_kwh,
-            "gunluk_ort": gunluk_ort,
-            "projeksiyon": projeksiyon,
-        }
+        return {"gercek_kwh": gercek_kwh, "gunluk_ort": gunluk_ort, "projeksiyon": projeksiyon}
     except Exception as e:
-        print(f"KWH HESAP HATASI: {e}")
+        print(f"KWH HATASI: {e}")
         return bos
 
-def kwh_bilgi_hesapla_cached(client: InfluxDBClient) -> dict:
-    global _kwh_cache
-    simdi = datetime.now(timezone.utc)
-    if (
-        _kwh_cache["veri"] is not None and
-        _kwh_cache["son_guncelleme"] is not None and
-        (simdi - _kwh_cache["son_guncelleme"]).total_seconds() < 60
-    ):
-        return _kwh_cache["veri"]
-    veri = kwh_bilgi_hesapla(client)
-    _kwh_cache["veri"]           = veri
-    _kwh_cache["son_guncelleme"] = simdi
-    return veri
-
-def son_watt_getir(client: InfluxDBClient, cihaz_tag: str) -> float:
-    query_api = client.query_api()
-    query = f'''
-        from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -2m)
-        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
-        |> filter(fn: (r) => r["_field"] == "guc")
-        |> filter(fn: (r) => r["cihaz"] == "{cihaz_tag}")
-        |> mean()
-    '''
+def enerji_gecmisi_hesapla(client: InfluxDBClient) -> dict:
     try:
-        result = query_api.query(org=INFLUX_ORG, query=query)
+        query = f'''
+            from(bucket: "{INFLUX_BUCKET}")
+            |> range(start: -3d)
+            |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+            |> filter(fn: (r) => r["_field"] == "guc")
+            |> filter(fn: (r) => r["ev"] == "ev1")
+            |> filter(fn: (r) =>
+                   r["cihaz"] == "ana_sayac" or
+                   r["cihaz"] == "buzdolabi" or
+                   r["cihaz"] == "televizyon")
+            |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
+        '''
+        result      = client.query_api().query(org=INFLUX_ORG, query=query)
+        cihaz_wh    = {"ana_sayac": 0.0, "buzdolabi": 0.0, "televizyon": 0.0}
+        cihaz_sayac = {"ana_sayac": 0,   "buzdolabi": 0,   "televizyon": 0}
         for table in result:
             for record in table.records:
-                return round(record.get_value() or 0.0, 1)
-        return 0.0
-    except Exception as e:
-        print(f"WATT GETIR HATASI ({cihaz_tag}): {e}")
-        return 0.0
+                tag = str(record.values.get("cihaz") or "").lower().strip()
+                if tag in cihaz_wh:
+                    cihaz_wh[tag]    += record.get_value() or 0.0
+                    cihaz_sayac[tag] += 1
 
-def seyyar_watt_getir(client: InfluxDBClient) -> float:
-    query_api = client.query_api()
-    query = f'''
-        from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -2m)
-        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
-        |> filter(fn: (r) => r["_field"] == "guc")
-        |> filter(fn: (r) => r["cihaz"] != "ana_sayac")
-        |> filter(fn: (r) => r["cihaz"] != "buzdolabi")
-        |> mean()
-    '''
-    try:
-        result = query_api.query(org=INFLUX_ORG, query=query)
-        for table in result:
-            for record in table.records:
-                return round(record.get_value() or 0.0, 1)
-        return 0.0
+        def ort_kwh(tag):
+            return round(cihaz_wh[tag]/1000.0, 2) if cihaz_sayac[tag] > 0 else 0.0
+
+        kwh_ana   = ort_kwh("ana_sayac")
+        kwh_buz   = ort_kwh("buzdolabi")
+        kwh_tv    = ort_kwh("televizyon")
+        kwh_diger = max(0.0, round(kwh_ana - kwh_buz - kwh_tv, 2))
+        toplam    = kwh_ana or (kwh_buz + kwh_tv + kwh_diger)
+
+        def yuzde(k): return round(k/toplam*100, 1) if toplam > 0 else 0.0
+
+        return {
+            "pasta": [
+                {"cihaz": "Buzdolabi",  "kwh": kwh_buz,   "yuzde": yuzde(kwh_buz)},
+                {"cihaz": "Televizyon", "kwh": kwh_tv,    "yuzde": yuzde(kwh_tv)},
+                {"cihaz": "Diger",      "kwh": kwh_diger, "yuzde": yuzde(kwh_diger)},
+            ],
+            "toplam_kwh": kwh_ana, "sure_gun": 3,
+        }
     except Exception as e:
-        print(f"SEYYAR WATT HATASI: {e}")
-        return 0.0
+        print(f"ENERJI HATASI: {e}")
+        return {"pasta": [], "toplam_kwh": 0.0, "sure_gun": 3}
+
+def cihaz_detaylari_hesapla(client: InfluxDBClient) -> list:
+    def watt_getir(tag):
+        try:
+            q = f'''
+                from(bucket: "{INFLUX_BUCKET}")
+                |> range(start: -2m)
+                |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+                |> filter(fn: (r) => r["_field"] == "guc")
+                |> filter(fn: (r) => r["cihaz"] == "{tag}")
+                |> mean()
+            '''
+            result = client.query_api().query(org=INFLUX_ORG, query=q)
+            for t in result:
+                for r in t.records:
+                    return round(r.get_value() or 0.0, 1)
+            return 0.0
+        except:
+            return 0.0
+
+    def seyyar_getir():
+        try:
+            q = f'''
+                from(bucket: "{INFLUX_BUCKET}")
+                |> range(start: -2m)
+                |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+                |> filter(fn: (r) => r["_field"] == "guc")
+                |> filter(fn: (r) => r["cihaz"] != "ana_sayac")
+                |> filter(fn: (r) => r["cihaz"] != "buzdolabi")
+                |> mean()
+            '''
+            result = client.query_api().query(org=INFLUX_ORG, query=q)
+            for t in result:
+                for r in t.records:
+                    return round(r.get_value() or 0.0, 1)
+            return 0.0
+        except:
+            return 0.0
+
+    sonuclar = []
+    for ad, tag, ikon in [
+        ("Ana Sayac (ESP32)", "ana_sayac", "electric_meter"),
+        ("Buzdolabi",         "buzdolabi", "kitchen"),
+    ]:
+        w = watt_getir(tag)
+        sonuclar.append({
+            "cihaz": ad, "ikon": ikon,
+            "anlik_watt":      f"{w} W",
+            "saatlik_maliyet": f"{watt_to_saatlik_tl(w)} TL/saat",
+            "durum":           "Aktif" if w > 5 else "Bekleme",
+        })
+    sw = seyyar_getir()
+    sonuclar.append({
+        "cihaz": "Seyyar Priz", "ikon": "power",
+        "anlik_watt":      f"{sw} W",
+        "saatlik_maliyet": f"{watt_to_saatlik_tl(sw)} TL/saat",
+        "durum":           "Aktif" if sw > 5 else "Bekleme",
+    })
+    return sonuclar
 
 
 # ==========================================
-# 7. EV DURUMU ENDPOINTI
+# 7. EV DURUMU
 # ==========================================
 @app.api_route("/ev-durumu", methods=["GET", "HEAD"])
 def get_ev_durumu():
@@ -254,7 +293,6 @@ def get_ev_durumu():
         pf_noktalari  = []
         anlik_watt    = 0.0
         is_alive      = False
-
         for table in results:
             for record in table.records:
                 val   = record.get_value() or 0.0
@@ -264,24 +302,24 @@ def get_ev_durumu():
                     anlik_watt = val
                 elif field == "guc_faktoru":
                     pf_noktalari.append(val)
-                gecen_sure = (datetime.now(timezone.utc) - record.get_time()).total_seconds()
-                if gecen_sure < 120:
+                if (datetime.now(timezone.utc) - record.get_time()).total_seconds() < 120:
                     is_alive = True
 
         aktif_cihaz = tahmin_et(guc_noktalari, pf_noktalari)
-        kwh_bilgi   = kwh_bilgi_hesapla_cached(client)
 
-        gunluk_ort  = kwh_bilgi["gunluk_ort"]
-        projeksiyon = kwh_bilgi["projeksiyon"]
-        fatura_tl   = _fatura_hesapla_kwh(projeksiyon)
+        # 60sn cache
+        if not _cache_gecerli(_kwh_cache, 60):
+            _cache_guncelle(_kwh_cache, kwh_bilgi_hesapla(client))
+        kwh     = _kwh_cache["veri"]
+        fatura  = _fatura_hesapla_kwh(kwh["projeksiyon"])
 
         return {
             "durum":             "Basarili" if is_alive else "Cevrimdisi",
             "anlik_toplam_watt": f"{round(anlik_watt, 1)} W",
             "aktif_cihaz":       aktif_cihaz,
-            "gunluk_ort_kwh":    f"{gunluk_ort} kWh/gun",
-            "projeksiyon_kwh":   f"{projeksiyon} kWh",
-            "tahmini_fatura":    f"{fatura_tl} TL",
+            "gunluk_ort_kwh":    f"{kwh['gunluk_ort']} kWh/gun",
+            "projeksiyon_kwh":   f"{kwh['projeksiyon']} kWh",
+            "tahmini_fatura":    f"{fatura} TL",
         }
     except Exception as e:
         return {"durum": "Hata", "mesaj": str(e)}
@@ -290,38 +328,17 @@ def get_ev_durumu():
 
 
 # ==========================================
-# 8. CIHAZ DETAYLARI ENDPOINTI
+# 8. CIHAZ DETAYLARI — 30sn cache
 # ==========================================
 @app.api_route("/cihaz-detaylari", methods=["GET", "HEAD"])
 def get_cihaz_detaylari():
-    cihazlar = [
-        {"ad": "Ana Sayac (ESP32)", "tag": "ana_sayac", "ikon": "electric_meter"},
-        {"ad": "Buzdolabi",         "tag": "buzdolabi", "ikon": "kitchen"},
-    ]
+    if _cache_gecerli(_cihaz_cache, 30):
+        return _cihaz_cache["veri"]
     client = get_influx_client()
     try:
-        sonuclar = []
-        for cihaz in cihazlar:
-            watt       = son_watt_getir(client, cihaz["tag"])
-            saatlik_tl = watt_to_saatlik_tl(watt)
-            durum      = "Aktif" if watt > 5 else "Bekleme"
-            sonuclar.append({
-                "cihaz":           cihaz["ad"],
-                "ikon":            cihaz["ikon"],
-                "anlik_watt":      f"{watt} W",
-                "saatlik_maliyet": f"{saatlik_tl} TL/saat",
-                "durum":           durum,
-            })
-        seyyar_watt = seyyar_watt_getir(client)
-        seyyar_tl   = watt_to_saatlik_tl(seyyar_watt)
-        sonuclar.append({
-            "cihaz":           "Seyyar Priz",
-            "ikon":            "power",
-            "anlik_watt":      f"{seyyar_watt} W",
-            "saatlik_maliyet": f"{seyyar_tl} TL/saat",
-            "durum":           "Aktif" if seyyar_watt > 5 else "Bekleme",
-        })
-        return sonuclar
+        veri = cihaz_detaylari_hesapla(client)
+        _cache_guncelle(_cihaz_cache, veri)
+        return veri
     except Exception as e:
         return [{"cihaz": "Hata", "mesaj": str(e)}]
     finally:
@@ -329,65 +346,19 @@ def get_cihaz_detaylari():
 
 
 # ==========================================
-# 9. ENERJI GECMISI — PASTA GRAFIK
+# 9. ENERJI GECMISI — 5dk cache
 # ==========================================
 @app.api_route("/enerji-gecmisi", methods=["GET", "HEAD"])
 def get_enerji_gecmisi():
-    client    = get_influx_client()
-    query_api = client.query_api()
-    query = f'''
-        from(bucket: "{INFLUX_BUCKET}")
-        |> range(start: -3d)
-        |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
-        |> filter(fn: (r) => r["_field"] == "guc")
-        |> filter(fn: (r) => r["ev"] == "ev1")
-        |> filter(fn: (r) =>
-               r["cihaz"] == "ana_sayac" or
-               r["cihaz"] == "buzdolabi" or
-               r["cihaz"] == "televizyon"
-        )
-        |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
-    '''
+    if _cache_gecerli(_enerji_cache, 300):
+        return _enerji_cache["veri"]
+    client = get_influx_client()
     try:
-        result      = query_api.query(org=INFLUX_ORG, query=query)
-        cihaz_wh    = {"ana_sayac": 0.0, "buzdolabi": 0.0, "televizyon": 0.0}
-        cihaz_sayac = {"ana_sayac": 0,   "buzdolabi": 0,   "televizyon": 0}
-
-        for table in result:
-            for record in table.records:
-                tag   = str(record.values.get("cihaz") or "").lower().strip()
-                value = record.get_value() or 0.0
-                if tag in cihaz_wh:
-                    cihaz_wh[tag]    += value
-                    cihaz_sayac[tag] += 1
-
-        def ort_kwh(tag):
-            if cihaz_sayac[tag] == 0:
-                return 0.0
-            return round(cihaz_wh[tag] / 1000.0, 2)
-
-        kwh_ana   = ort_kwh("ana_sayac")
-        kwh_buz   = ort_kwh("buzdolabi")
-        kwh_tv    = ort_kwh("televizyon")
-        kwh_diger = max(0.0, round(kwh_ana - kwh_buz - kwh_tv, 2))
-        toplam    = kwh_ana if kwh_ana > 0 else (kwh_buz + kwh_tv + kwh_diger)
-
-        def yuzde(kwh):
-            if toplam == 0:
-                return 0.0
-            return round(kwh / toplam * 100, 1)
-
-        return {
-            "pasta": [
-                {"cihaz": "Buzdolabi",  "kwh": kwh_buz,   "yuzde": yuzde(kwh_buz)},
-                {"cihaz": "Televizyon", "kwh": kwh_tv,    "yuzde": yuzde(kwh_tv)},
-                {"cihaz": "Diger",      "kwh": kwh_diger, "yuzde": yuzde(kwh_diger)},
-            ],
-            "toplam_kwh": kwh_ana,
-            "sure_gun":   3,
-        }
+        veri = enerji_gecmisi_hesapla(client)
+        _cache_guncelle(_enerji_cache, veri)
+        return veri
     except Exception as e:
-        print(f"ENERJI GECMISI HATASI: {e}")
+        print(f"ENERJI HATASI: {e}")
         return {"pasta": [], "toplam_kwh": 0.0, "sure_gun": 3}
     finally:
         client.close()
@@ -400,18 +371,11 @@ def get_enerji_gecmisi():
 def get_grafik_gecmisi(saat: int = 1):
     client    = get_influx_client()
     query_api = client.query_api()
-
-    if saat <= 1:
-        pencere = "1m"
-    elif saat <= 24:
-        pencere = "5m"
-    else:
-        pencere = "1h"
-
+    pencere   = "1m" if saat <= 1 else ("5m" if saat <= 24 else "1h")
+    TURKEY_TZ = timezone(timedelta(hours=3))
     query = f'''
         import "timezone"
         option location = timezone.location(name: "Europe/Istanbul")
-
         from(bucket: "{INFLUX_BUCKET}")
         |> range(start: -{saat}h)
         |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
@@ -420,47 +384,34 @@ def get_grafik_gecmisi(saat: int = 1):
         |> filter(fn: (r) =>
                r["cihaz"] == "ana_sayac" or
                r["cihaz"] == "buzdolabi" or
-               r["cihaz"] == "televizyon"
-        )
+               r["cihaz"] == "televizyon")
         |> aggregateWindow(every: {pencere}, fn: mean, createEmpty: true)
         |> filter(fn: (r) => r["_value"] < 3000)
         |> fill(value: 0.0)
     '''
-
-    TURKEY_TZ = timezone(timedelta(hours=3))
-
     try:
         result   = query_api.query(org=INFLUX_ORG, query=query)
         time_map = {}
-
         for table in result:
             for record in table.records:
-                time  = record.get_time().astimezone(TURKEY_TZ).strftime("%Y-%m-%dT%H:%M:%S")
-                value = record.get_value() or 0.0
-                tag   = str(record.values.get("cihaz") or "").lower().strip()
-
-                if time not in time_map:
-                    time_map[time] = {"ana_sayac": 0.0, "buzdolabi": 0.0, "seyyar_priz": 0.0}
-
+                t   = record.get_time().astimezone(TURKEY_TZ).strftime("%Y-%m-%dT%H:%M:%S")
+                val = record.get_value() or 0.0
+                tag = str(record.values.get("cihaz") or "").lower().strip()
+                if t not in time_map:
+                    time_map[t] = {"ana_sayac": 0.0, "buzdolabi": 0.0, "seyyar_priz": 0.0}
                 if tag == "ana_sayac":
-                    time_map[time]["ana_sayac"]   = round(value, 1)
+                    time_map[t]["ana_sayac"]   = round(val, 1)
                 elif tag == "buzdolabi":
-                    time_map[time]["buzdolabi"]   = round(value, 1)
+                    time_map[t]["buzdolabi"]   = round(val, 1)
                 elif tag == "televizyon":
-                    time_map[time]["seyyar_priz"] = round(value, 1)
-
-        final_list = [
-            {
-                "zaman":       t,
-                "esp32_ana":   d["ana_sayac"],
-                "buzdolabi":   d["buzdolabi"],
-                "seyyar_priz": d["seyyar_priz"],
-            }
-            for t, d in time_map.items()
-        ]
-        final_list.sort(key=lambda x: x["zaman"])
-        return final_list
-
+                    time_map[t]["seyyar_priz"] = round(val, 1)
+        final = sorted(
+            [{"zaman": t, "esp32_ana": d["ana_sayac"],
+              "buzdolabi": d["buzdolabi"], "seyyar_priz": d["seyyar_priz"]}
+             for t, d in time_map.items()],
+            key=lambda x: x["zaman"]
+        )
+        return final
     except Exception as e:
         print(f"GRAFIK HATASI: {e}")
         return []
@@ -469,7 +420,7 @@ def get_grafik_gecmisi(saat: int = 1):
 
 
 # ==========================================
-# 11. SAGLIK KONTROLU VE PING
+# 11. SAGLIK
 # ==========================================
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
