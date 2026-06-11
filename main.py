@@ -114,18 +114,28 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
     aktif    = []
     if son_watt >= 5:
         aktif.append("Buzdolabi")
-    if son_watt > 1500:
+
+    # Cihaz watt araliklari (Hucre 16 sabit degerlerine gore):
+    # Utu       ~1200W (1280-1500W gurultuyle)
+    # Sac Kurutma ~1650W (1400-2150W gurultuyle)
+    # Firin     ~1800W (1400-2150W gurultuyle, sac kurutma ile cakisir)
+    # Camasir Isitma ~2100W (1800W+)
+    # Supurge   ~1100W
+
+    if son_watt > 1900:
         aktif = ["Camasir Makinesi (Isitma)", "Buzdolabi"]
-    elif 300 <= son_watt <= 1500 and son_pf < 0.82:
+    elif 300 <= son_watt <= 1900 and son_pf < 0.82:
         if "Buzdolabi" not in aktif:
             aktif.append("Buzdolabi")
         aktif.append("Camasir Makinesi")
-    elif son_watt > 1000 and son_pf > 0.90:
-        aktif.append("Firin")
-    elif son_watt > 800 and son_pf > 0.90:
-        aktif.append("Sac Kurutma")
-    elif son_watt > 600 and son_pf > 0.90:
+    elif 1250 <= son_watt <= 1900 and son_pf > 0.90:
+        # Firin ve Sac Kurutma bu aralikta cakisiyor, ayirt edilemiyor
+        aktif.append("Firin/Sac Kurutma")
+    elif 1000 <= son_watt < 1250 and son_pf > 0.90:
         aktif.append("Utu")
+    elif 800 <= son_watt < 1250 and son_pf > 0.90:
+        aktif.append("Supurge")
+
     if son_pf < 0.78 and son_watt < 400 and son_watt > 50:
         if "Televizyon" not in aktif:
             aktif.append("Televizyon")
