@@ -231,11 +231,11 @@ def cihaz_detaylari_hesapla(client: InfluxDBClient) -> list:
     try:
         q = f'''
             from(bucket: "{INFLUX_BUCKET}")
-            |> range(start: -1m)
+            |> range(start: -20s)
             |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
             |> filter(fn: (r) => r["_field"] == "guc")
             |> group(columns: ["cihaz"])
-            |> mean()
+            |> last()
         '''
         result = client.query_api().query(org=INFLUX_ORG, query=q)
 
@@ -322,7 +322,7 @@ def get_ev_durumu():
 # ==========================================
 @app.api_route("/cihaz-detaylari", methods=["GET", "HEAD"])
 def get_cihaz_detaylari():
-    if _cache_gecerli(_cihaz_cache, 30):
+    if _cache_gecerli(_cihaz_cache, 5):
         return _cihaz_cache["veri"]
     client = get_influx_client()
     try:
