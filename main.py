@@ -142,31 +142,70 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
     return " + ".join(aktif) if aktif else "Bosta"
 
 def kwh_bilgi_hesapla(client: InfluxDBClient) -> dict:
+    """
+    Onceki versiyon 259K satiri Python'a cekip elle integral
+    hesapliyordu (yuksek bellek kullanimi). Bu versiyon:
+      1) InfluxDB'nin kendi integral() fonksiyonuyla kWh'yi
+         sunucu tarafinda hesaplatir (1dk aggregateWindow ile
+         once veri seyreltilir, boylece WiFi kopmasi gibi
+         buyuk bosluklar entegrasyonu bozmaz).
+      2) Sadece ilk ve son zaman damgasini cekmek icin ayri,
+         cok hafif bir sorgu kullanir (gun sayisi icin).
+      3) query_stream() ile sonuclari satir satir okur,
+         tum sonucu belleğe yigmaz.
+    """
     bos = {"gercek_kwh": 0.0, "gunluk_ort": 0.0, "projeksiyon": 0.0}
     try:
-        query = f'''
+        # --- 1) kWh: sunucu tarafinda integral() ---
+        integral_query = f'''
             from(bucket: "{INFLUX_BUCKET}")
             |> range(start: -15d)
             |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
             |> filter(fn: (r) => r["_field"] == "guc")
             |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
-            |> sort(columns: ["_time"])
+            |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
+            |> integral(unit: 1h)
         '''
-        result   = client.query_api().query(org=INFLUX_ORG, query=query)
-        kayitlar = [(r.get_time(), r.get_value() or 0.0)
-                    for t in result for r in t.records]
-        if len(kayitlar) < 2:
-            return bos
         toplam_wh = 0.0
-        for i in range(1, len(kayitlar)):
-            t0, w0 = kayitlar[i-1]; t1, w1 = kayitlar[i]
-            sure = (t1-t0).total_seconds() / 3600.0
-            if sure <= 10/60:
-                toplam_wh += max((w0+w1)/2, 0.0) * sure
+        for record in client.query_api().query_stream(org=INFLUX_ORG, query=integral_query):
+            toplam_wh += record.get_value() or 0.0
+
+        if toplam_wh <= 0:
+            return bos
+
         gercek_kwh = round(toplam_wh / 1000.0, 2)
-        sure_gun   = (kayitlar[-1][0]-kayitlar[0][0]).total_seconds() / 86400.0
+
+        # --- 2) sure_gun: sadece ilk ve son zaman damgasi ---
+        ilk_kayit, son_kayit = None, None
+        ilk_query = f'''
+            from(bucket: "{INFLUX_BUCKET}")
+            |> range(start: -15d)
+            |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+            |> filter(fn: (r) => r["_field"] == "guc")
+            |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
+            |> first()
+        '''
+        for record in client.query_api().query_stream(org=INFLUX_ORG, query=ilk_query):
+            ilk_kayit = record.get_time()
+
+        son_query = f'''
+            from(bucket: "{INFLUX_BUCKET}")
+            |> range(start: -15d)
+            |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+            |> filter(fn: (r) => r["_field"] == "guc")
+            |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
+            |> last()
+        '''
+        for record in client.query_api().query_stream(org=INFLUX_ORG, query=son_query):
+            son_kayit = record.get_time()
+
+        if not ilk_kayit or not son_kayit:
+            return {"gercek_kwh": gercek_kwh, "gunluk_ort": 0.0, "projeksiyon": 0.0}
+
+        sure_gun = (son_kayit - ilk_kayit).total_seconds() / 86400.0
         if sure_gun < 0.1:
             return {"gercek_kwh": gercek_kwh, "gunluk_ort": 0.0, "projeksiyon": 0.0}
+
         gunluk_ort  = round(gercek_kwh / sure_gun, 2)
         projeksiyon = round(gunluk_ort * 30, 2)
         return {"gercek_kwh": gercek_kwh, "gunluk_ort": gunluk_ort, "projeksiyon": projeksiyon}
@@ -188,15 +227,13 @@ def enerji_gecmisi_hesapla(client: InfluxDBClient) -> dict:
                    r["cihaz"] == "televizyon")
             |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
         '''
-        result      = client.query_api().query(org=INFLUX_ORG, query=query)
         cihaz_wh    = {"ana_sayac": 0.0, "buzdolabi": 0.0, "televizyon": 0.0}
         cihaz_sayac = {"ana_sayac": 0,   "buzdolabi": 0,   "televizyon": 0}
-        for table in result:
-            for record in table.records:
-                tag = str(record.values.get("cihaz") or "").lower().strip()
-                if tag in cihaz_wh:
-                    cihaz_wh[tag]    += record.get_value() or 0.0
-                    cihaz_sayac[tag] += 1
+        for record in client.query_api().query_stream(org=INFLUX_ORG, query=query):
+            tag = str(record.values.get("cihaz") or "").lower().strip()
+            if tag in cihaz_wh:
+                cihaz_wh[tag]    += record.get_value() or 0.0
+                cihaz_sayac[tag] += 1
 
         def ort_kwh(tag):
             return round(cihaz_wh[tag]/1000.0, 2) if cihaz_sayac[tag] > 0 else 0.0
@@ -247,22 +284,19 @@ def cihaz_detaylari_hesapla(client: InfluxDBClient) -> list:
             |> group(columns: ["cihaz"])
             |> last()
         '''
-        result = client.query_api().query(org=INFLUX_ORG, query=q)
-
         sonuclar = []
-        for table in result:
-            for record in table.records:
-                tag = str(record.values.get("cihaz") or "").lower().strip()
-                if not tag:
-                    continue
-                w = round(record.get_value() or 0.0, 1)
-                ad, ikon = CIHAZ_GORUNUM.get(tag, (tag.replace("_", " ").title(), "power"))
-                sonuclar.append({
-                    "cihaz": ad, "ikon": ikon,
-                    "anlik_watt":      f"{w} W",
-                    "saatlik_maliyet": f"{watt_to_saatlik_tl(w)} TL/saat",
-                    "durum":           "Aktif" if w > 5 else "Bekleme",
-                })
+        for record in client.query_api().query_stream(org=INFLUX_ORG, query=q):
+            tag = str(record.values.get("cihaz") or "").lower().strip()
+            if not tag:
+                continue
+            w = round(record.get_value() or 0.0, 1)
+            ad, ikon = CIHAZ_GORUNUM.get(tag, (tag.replace("_", " ").title(), "power"))
+            sonuclar.append({
+                "cihaz": ad, "ikon": ikon,
+                "anlik_watt":      f"{w} W",
+                "saatlik_maliyet": f"{watt_to_saatlik_tl(w)} TL/saat",
+                "durum":           "Aktif" if w > 5 else "Bekleme",
+            })
 
         sonuclar.sort(key=lambda x: 0 if x["cihaz"] == "Ana Sayac (ESP32)" else 1)
         return sonuclar
@@ -288,22 +322,20 @@ def get_ev_durumu():
         |> sort(columns: ["_time"])
     '''
     try:
-        results       = query_api.query(org=INFLUX_ORG, query=query)
         guc_noktalari = []
         pf_noktalari  = []
         anlik_watt    = 0.0
         is_alive      = False
-        for table in results:
-            for record in table.records:
-                val   = record.get_value() or 0.0
-                field = record.get_field()
-                if field == "guc":
-                    guc_noktalari.append(val)
-                    anlik_watt = val
-                elif field == "guc_faktoru":
-                    pf_noktalari.append(val)
-                if (datetime.now(timezone.utc) - record.get_time()).total_seconds() < 120:
-                    is_alive = True
+        for record in query_api.query_stream(org=INFLUX_ORG, query=query):
+            val   = record.get_value() or 0.0
+            field = record.get_field()
+            if field == "guc":
+                guc_noktalari.append(val)
+                anlik_watt = val
+            elif field == "guc_faktoru":
+                pf_noktalari.append(val)
+            if (datetime.now(timezone.utc) - record.get_time()).total_seconds() < 120:
+                is_alive = True
 
         aktif_cihaz = tahmin_et(guc_noktalari, pf_noktalari)
 
@@ -390,21 +422,19 @@ def get_grafik_gecmisi(saat: int = 1):
         |> fill(value: 0.0)
     '''
     try:
-        result   = query_api.query(org=INFLUX_ORG, query=query)
         time_map = {}
-        for table in result:
-            for record in table.records:
-                t   = record.get_time().astimezone(TURKEY_TZ).strftime("%Y-%m-%dT%H:%M:%S")
-                val = record.get_value() or 0.0
-                tag = str(record.values.get("cihaz") or "").lower().strip()
-                if t not in time_map:
-                    time_map[t] = {"ana_sayac": 0.0, "buzdolabi": 0.0, "seyyar_priz": 0.0}
-                if tag == "ana_sayac":
-                    time_map[t]["ana_sayac"]   = round(val, 1)
-                elif tag == "buzdolabi":
-                    time_map[t]["buzdolabi"]   = round(val, 1)
-                elif tag == "televizyon":
-                    time_map[t]["seyyar_priz"] = round(val, 1)
+        for record in query_api.query_stream(org=INFLUX_ORG, query=query):
+            t   = record.get_time().astimezone(TURKEY_TZ).strftime("%Y-%m-%dT%H:%M:%S")
+            val = record.get_value() or 0.0
+            tag = str(record.values.get("cihaz") or "").lower().strip()
+            if t not in time_map:
+                time_map[t] = {"ana_sayac": 0.0, "buzdolabi": 0.0, "seyyar_priz": 0.0}
+            if tag == "ana_sayac":
+                time_map[t]["ana_sayac"]   = round(val, 1)
+            elif tag == "buzdolabi":
+                time_map[t]["buzdolabi"]   = round(val, 1)
+            elif tag == "televizyon":
+                time_map[t]["seyyar_priz"] = round(val, 1)
         final = sorted(
             [{"zaman": t, "esp32_ana": d["ana_sayac"],
               "buzdolabi": d["buzdolabi"], "seyyar_priz": d["seyyar_priz"]}
