@@ -143,71 +143,62 @@ def tahmin_et(guc_verileri: list, pf_verileri: list = []) -> str:
 
 def kwh_bilgi_hesapla(client: InfluxDBClient) -> dict:
     """
-    Onceki versiyon 259K satiri Python'a cekip elle integral
-    hesapliyordu (yuksek bellek kullanimi). Bu versiyon:
-      1) InfluxDB'nin kendi integral() fonksiyonuyla kWh'yi
-         sunucu tarafinda hesaplatir (1dk aggregateWindow ile
-         once veri seyreltilir, boylece WiFi kopmasi gibi
-         buyuk bosluklar entegrasyonu bozmaz).
-      2) Sadece ilk ve son zaman damgasini cekmek icin ayri,
-         cok hafif bir sorgu kullanir (gun sayisi icin).
-      3) query_stream() ile sonuclari satir satir okur,
-         tum sonucu belleğe yigmaz.
+    InfluxDB'de 1 dakikalik aggregateWindow ile veri seyreltilir.
+    Tek donguyle toplam Wh (her 1dk noktasi watt/60 Wh temsil eder)
+    ve kayit sayisi (= toplam dakika) hesaplanir.
+
+    gunluk_ort, "su anki ortalama tuketim hizi 24 saat boyunca devam
+    etseydi ne kadar kWh tuketilirdi" sorusuna cevap verir:
+        ortalama_watt = toplam_wh / toplam_dakika
+        gunluk_kwh    = ortalama_watt * 24 / 1000
+
+    Bu yaklasim, veri penceresinin uzunlugundan (1 saatlik veri de,
+    15 gunluk veri de) bagimsiz olarak dogru gunluk projeksiyon verir
+    -- onceki versiyondaki "kisa pencere -> sisirilmis gunluk_ort"
+    sorununu ortadan kaldirir.
+
+    query_stream() ile sonuc satir satir okunur, belleğe yigilmaz.
     """
     bos = {"gercek_kwh": 0.0, "gunluk_ort": 0.0, "projeksiyon": 0.0}
     try:
-        # --- 1) kWh: sunucu tarafinda integral() ---
-        integral_query = f'''
+        agg_query = f'''
+            from(bucket: "{INFLUX_BUCKET}")
+            |> range(start: -1d)
+            |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+            |> filter(fn: (r) => r["_field"] == "guc")
+            |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
+            |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
+        '''
+        toplam_wh   = 0.0
+        toplam_dk   = 0
+        for record in client.query_api().query_stream(org=INFLUX_ORG, query=agg_query):
+            val = record.get_value() or 0.0
+            toplam_wh += val / 60.0  # 1 dakikalik dilim -> Wh
+            toplam_dk += 1
+
+        if toplam_dk == 0 or toplam_wh <= 0:
+            return bos
+
+        # Son 15 gunde toplam tuketilen gercek enerji (15 gunluk pencere)
+        gercek_query = f'''
             from(bucket: "{INFLUX_BUCKET}")
             |> range(start: -15d)
             |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
             |> filter(fn: (r) => r["_field"] == "guc")
             |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
             |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
-            |> integral(unit: 1h)
         '''
-        toplam_wh = 0.0
-        for record in client.query_api().query_stream(org=INFLUX_ORG, query=integral_query):
-            toplam_wh += record.get_value() or 0.0
+        toplam_wh_15g = 0.0
+        for record in client.query_api().query_stream(org=INFLUX_ORG, query=gercek_query):
+            toplam_wh_15g += (record.get_value() or 0.0) / 60.0
 
-        if toplam_wh <= 0:
-            return bos
+        gercek_kwh = round(toplam_wh_15g / 1000.0, 2)
 
-        gercek_kwh = round(toplam_wh / 1000.0, 2)
+        # Ortalama watt (son 1 gunluk pencereden) -> 24 saatlik gunluk projeksiyon
+        ortalama_watt = toplam_wh / toplam_dk * 60.0  # Wh/dk -> W
+        gunluk_ort    = round(ortalama_watt * 24 / 1000.0, 2)
+        projeksiyon   = round(gunluk_ort * 30, 2)
 
-        # --- 2) sure_gun: sadece ilk ve son zaman damgasi ---
-        ilk_kayit, son_kayit = None, None
-        ilk_query = f'''
-            from(bucket: "{INFLUX_BUCKET}")
-            |> range(start: -15d)
-            |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
-            |> filter(fn: (r) => r["_field"] == "guc")
-            |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
-            |> first()
-        '''
-        for record in client.query_api().query_stream(org=INFLUX_ORG, query=ilk_query):
-            ilk_kayit = record.get_time()
-
-        son_query = f'''
-            from(bucket: "{INFLUX_BUCKET}")
-            |> range(start: -15d)
-            |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
-            |> filter(fn: (r) => r["_field"] == "guc")
-            |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
-            |> last()
-        '''
-        for record in client.query_api().query_stream(org=INFLUX_ORG, query=son_query):
-            son_kayit = record.get_time()
-
-        if not ilk_kayit or not son_kayit:
-            return {"gercek_kwh": gercek_kwh, "gunluk_ort": 0.0, "projeksiyon": 0.0}
-
-        sure_gun = (son_kayit - ilk_kayit).total_seconds() / 86400.0
-        if sure_gun < 0.1:
-            return {"gercek_kwh": gercek_kwh, "gunluk_ort": 0.0, "projeksiyon": 0.0}
-
-        gunluk_ort  = round(gercek_kwh / sure_gun, 2)
-        projeksiyon = round(gunluk_ort * 30, 2)
         return {"gercek_kwh": gercek_kwh, "gunluk_ort": gunluk_ort, "projeksiyon": projeksiyon}
     except Exception as e:
         print(f"KWH HATASI: {e}")
