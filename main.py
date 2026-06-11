@@ -211,64 +211,54 @@ def enerji_gecmisi_hesapla(client: InfluxDBClient) -> dict:
         print(f"ENERJI HATASI: {e}")
         return {"pasta": [], "toplam_kwh": 0.0, "sure_gun": 3}
 
+CIHAZ_GORUNUM = {
+    "ana_sayac":        ("Ana Sayac (ESP32)", "electric_meter"),
+    "buzdolabi":        ("Buzdolabi",         "kitchen"),
+    "televizyon":       ("Televizyon",        "tv"),
+    "camasir_makinesi": ("Camasir Makinesi",  "local_laundry_service"),
+    "firin":            ("Firin",             "microwave"),
+    "utu":              ("Utu",               "iron"),
+    "sac_kurutma":      ("Sac Kurutma",       "dry"),
+    "supurge":          ("Supurge",           "cleaning_services"),
+}
+
 def cihaz_detaylari_hesapla(client: InfluxDBClient) -> list:
-    def watt_getir(tag):
-        try:
-            q = f'''
-                from(bucket: "{INFLUX_BUCKET}")
-                |> range(start: -2m)
-                |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
-                |> filter(fn: (r) => r["_field"] == "guc")
-                |> filter(fn: (r) => r["cihaz"] == "{tag}")
-                |> mean()
-            '''
-            result = client.query_api().query(org=INFLUX_ORG, query=q)
-            for t in result:
-                for r in t.records:
-                    return round(r.get_value() or 0.0, 1)
-            return 0.0
-        except:
-            return 0.0
+    """
+    Son 1 dakika icinde InfluxDB'ye yazilmis TUM cihaz tag'lerini ceker.
+    Hucre 16'nin o an yazdigi cihazlar (ana_sayac, buzdolabi ve aktif
+    olan diger cihazlar) birebir burada da gorunur.
+    """
+    try:
+        q = f'''
+            from(bucket: "{INFLUX_BUCKET}")
+            |> range(start: -1m)
+            |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
+            |> filter(fn: (r) => r["_field"] == "guc")
+            |> group(columns: ["cihaz"])
+            |> mean()
+        '''
+        result = client.query_api().query(org=INFLUX_ORG, query=q)
 
-    def seyyar_getir():
-        try:
-            q = f'''
-                from(bucket: "{INFLUX_BUCKET}")
-                |> range(start: -2m)
-                |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
-                |> filter(fn: (r) => r["_field"] == "guc")
-                |> filter(fn: (r) => r["cihaz"] != "ana_sayac")
-                |> filter(fn: (r) => r["cihaz"] != "buzdolabi")
-                |> mean()
-            '''
-            result = client.query_api().query(org=INFLUX_ORG, query=q)
-            for t in result:
-                for r in t.records:
-                    return round(r.get_value() or 0.0, 1)
-            return 0.0
-        except:
-            return 0.0
+        sonuclar = []
+        for table in result:
+            for record in table.records:
+                tag = str(record.values.get("cihaz") or "").lower().strip()
+                if not tag:
+                    continue
+                w = round(record.get_value() or 0.0, 1)
+                ad, ikon = CIHAZ_GORUNUM.get(tag, (tag.replace("_", " ").title(), "power"))
+                sonuclar.append({
+                    "cihaz": ad, "ikon": ikon,
+                    "anlik_watt":      f"{w} W",
+                    "saatlik_maliyet": f"{watt_to_saatlik_tl(w)} TL/saat",
+                    "durum":           "Aktif" if w > 5 else "Bekleme",
+                })
 
-    sonuclar = []
-    for ad, tag, ikon in [
-        ("Ana Sayac (ESP32)", "ana_sayac", "electric_meter"),
-        ("Buzdolabi",         "buzdolabi", "kitchen"),
-    ]:
-        w = watt_getir(tag)
-        sonuclar.append({
-            "cihaz": ad, "ikon": ikon,
-            "anlik_watt":      f"{w} W",
-            "saatlik_maliyet": f"{watt_to_saatlik_tl(w)} TL/saat",
-            "durum":           "Aktif" if w > 5 else "Bekleme",
-        })
-    sw = seyyar_getir()
-    sonuclar.append({
-        "cihaz": "Seyyar Priz", "ikon": "power",
-        "anlik_watt":      f"{sw} W",
-        "saatlik_maliyet": f"{watt_to_saatlik_tl(sw)} TL/saat",
-        "durum":           "Aktif" if sw > 5 else "Bekleme",
-    })
-    return sonuclar
+        sonuclar.sort(key=lambda x: 0 if x["cihaz"] == "Ana Sayac (ESP32)" else 1)
+        return sonuclar
+    except Exception as e:
+        print(f"CIHAZ DETAY HATASI: {e}")
+        return []
 
 
 # ==========================================
