@@ -163,7 +163,7 @@ def kwh_bilgi_hesapla(client: InfluxDBClient) -> dict:
     try:
         agg_query = f'''
             from(bucket: "{INFLUX_BUCKET}")
-            |> range(start: -1d)
+            |> range(start: -2h)
             |> filter(fn: (r) => r["_measurement"] == "gercek_tuketim")
             |> filter(fn: (r) => r["_field"] == "guc")
             |> filter(fn: (r) => r["cihaz"] == "ana_sayac")
