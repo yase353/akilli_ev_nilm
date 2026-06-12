@@ -113,6 +113,16 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
     } catch (_) {}
   }
 
+  // ----------------------------------------
+  // Kaydırarak yenileme (pull-to-refresh)
+  // ----------------------------------------
+  Future<void> _yenile() async {
+    await Future.wait([
+      verileriGetir(),
+      pastaVerisiGetir(),
+    ]);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -413,107 +423,101 @@ class _EvDurumuSayfasiState extends State<EvDurumuSayfasi> {
       appBar: AppBar(
         title: const Text("Akıllı Ev NILM Asistanı"),
         centerTitle: true,
-        actions: [
-          IconButton(
-            onPressed: () {
-              setState(() => yukleniyor = true);
-              verileriGetir();
-              pastaVerisiGetir();
-            },
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
       ),
       body: yukleniyor
           ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  // Sistem durumu
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        vertical: 8, horizontal: 16),
-                    decoration: BoxDecoration(
-                      color: durum == "Basarili"
-                          ? Colors.green.shade100
-                          : Colors.red.shade100,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.circle,
-                          size: 10,
-                          color: durum == "Basarili"
-                              ? Colors.green
-                              : Colors.red,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          "Sistem: $durum",
-                          style: TextStyle(
+          : RefreshIndicator(
+              onRefresh: _yenile,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  children: [
+                    // Sistem durumu
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 8, horizontal: 16),
+                      decoration: BoxDecoration(
+                        color: durum == "Basarili"
+                            ? Colors.green.shade100
+                            : Colors.red.shade100,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.circle,
+                            size: 10,
                             color: durum == "Basarili"
-                                ? Colors.green.shade900
-                                : Colors.red.shade900,
+                                ? Colors.green
+                                : Colors.red,
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-
-                  // AI paneli
-                  _buildAIPaneli(),
-                  const SizedBox(height: 20),
-
-                  // Tüketim kartı
-                  InkWell(
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => const GrafikSayfasi()),
-                    ),
-                    child: Card(
-                      child: ListTile(
-                        leading: const Icon(Icons.electric_bolt,
-                            color: Colors.orange, size: 40),
-                        title: const Text("Toplam Tüketim"),
-                        subtitle: Text(
-                          anlikWatt,
-                          style: const TextStyle(
-                              fontSize: 24, fontWeight: FontWeight.bold),
-                        ),
-                        trailing: const Icon(Icons.show_chart,
-                            color: Colors.orange),
+                          const SizedBox(width: 8),
+                          Text(
+                            "Sistem: $durum",
+                            style: TextStyle(
+                              color: durum == "Basarili"
+                                  ? Colors.green.shade900
+                                  : Colors.red.shade900,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 10),
+                    const SizedBox(height: 20),
 
-                  // Projeksiyon kartı — eski fatura kartının yerine
-                  _buildProjeksiyonKarti(),
-                  const SizedBox(height: 10),
+                    // AI paneli
+                    _buildAIPaneli(),
+                    const SizedBox(height: 20),
 
-                  // Cihaz detayları butonu
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                        minimumSize: const Size(double.infinity, 50)),
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => const CihazTabloSayfasi()),
+                    // Tüketim kartı
+                    InkWell(
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (context) => const GrafikSayfasi()),
+                      ),
+                      child: Card(
+                        child: ListTile(
+                          leading: const Icon(Icons.electric_bolt,
+                              color: Colors.orange, size: 40),
+                          title: const Text("Toplam Tüketim"),
+                          subtitle: Text(
+                            anlikWatt,
+                            style: const TextStyle(
+                                fontSize: 24, fontWeight: FontWeight.bold),
+                          ),
+                          trailing: const Icon(Icons.show_chart,
+                              color: Colors.orange),
+                        ),
+                      ),
                     ),
-                    icon: const Icon(Icons.list_alt),
-                    label: const Text("Tüm Cihaz Detaylarını Gör"),
-                  ),
-                  const SizedBox(height: 20),
+                    const SizedBox(height: 10),
 
-                  // Pasta grafik
-                  _buildPastaGrafik(),
-                  const SizedBox(height: 16),
-                ],
+                    // Projeksiyon kartı — eski fatura kartının yerine
+                    _buildProjeksiyonKarti(),
+                    const SizedBox(height: 10),
+
+                    // Cihaz detayları butonu
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 50)),
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (context) => const CihazTabloSayfasi()),
+                      ),
+                      icon: const Icon(Icons.list_alt),
+                      label: const Text("Tüm Cihaz Detaylarını Gör"),
+                    ),
+                    const SizedBox(height: 20),
+
+                    // Pasta grafik
+                    _buildPastaGrafik(),
+                    const SizedBox(height: 16),
+                  ],
+                ),
               ),
             ),
     );
@@ -876,56 +880,59 @@ class _CihazTabloSayfasiState extends State<CihazTabloSayfasi> {
                     ],
                   ),
                 )
-              : ListView.builder(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: cihazlar.length,
-                  itemBuilder: (context, i) {
-                    final item  = cihazlar[i];
-                    final aktif = item['durum'] == "Aktif";
-                    return Card(
-                      margin: const EdgeInsets.symmetric(vertical: 6),
-                      child: ListTile(
-                        leading: Icon(
-                          _ikonSec(item['ikon'] ?? ""),
-                          color: aktif ? Colors.green : Colors.grey,
-                          size: 36,
-                        ),
-                        title: Text(
-                          item['cihaz'] ?? "",
-                          style: const TextStyle(
-                              fontWeight: FontWeight.bold),
-                        ),
-                        subtitle: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text("⚡ ${item['anlik_watt'] ?? '0 W'}"),
-                            Text("💰 ${item['saatlik_maliyet'] ?? '0 TL/saat'}"),
-                          ],
-                        ),
-                        trailing: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: aktif
-                                ? Colors.green.shade100
-                                : Colors.grey.shade200,
-                            borderRadius: BorderRadius.circular(12),
+              : RefreshIndicator(
+                  onRefresh: _verileriGetir,
+                  child: ListView.builder(
+                    padding: const EdgeInsets.all(12),
+                    itemCount: cihazlar.length,
+                    itemBuilder: (context, i) {
+                      final item  = cihazlar[i];
+                      final aktif = item['durum'] == "Aktif";
+                      return Card(
+                        margin: const EdgeInsets.symmetric(vertical: 6),
+                        child: ListTile(
+                          leading: Icon(
+                            _ikonSec(item['ikon'] ?? ""),
+                            color: aktif ? Colors.green : Colors.grey,
+                            size: 36,
                           ),
-                          child: Text(
-                            item['durum'] ?? "",
-                            style: TextStyle(
+                          title: Text(
+                            item['cihaz'] ?? "",
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold),
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text("⚡ ${item['anlik_watt'] ?? '0 W'}"),
+                              Text("💰 ${item['saatlik_maliyet'] ?? '0 TL/saat'}"),
+                            ],
+                          ),
+                          trailing: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
                               color: aktif
-                                  ? Colors.green.shade800
-                                  : Colors.grey,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
+                                  ? Colors.green.shade100
+                                  : Colors.grey.shade200,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              item['durum'] ?? "",
+                              style: TextStyle(
+                                color: aktif
+                                    ? Colors.green.shade800
+                                    : Colors.grey,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
                             ),
                           ),
+                          isThreeLine: true,
                         ),
-                        isThreeLine: true,
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
     );
   }
