@@ -49,7 +49,7 @@ INFLUX_BUCKET=tez_verileri
 
 ## Canlı Demo
 
-API: https://akilli-ev-nilm-9.onrender.com  
+API: https://akilli-ev-nilm-zgcq.onrender.com 
 Web: https://yase353.github.io/akilli-ev-web/
 
 ## Teknolojiler
