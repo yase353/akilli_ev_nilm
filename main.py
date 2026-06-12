@@ -252,7 +252,7 @@ def enerji_gecmisi_hesapla(client: InfluxDBClient) -> dict:
 CIHAZ_GORUNUM = {
     "ana_sayac":        ("Ana Sayac (ESP32)", "electric_meter"),
     "buzdolabi":        ("Buzdolabi",         "kitchen"),
-    "televizyon":       ("Televizyon",        "tv"),
+    "televizyon":       ("Seyyar Priz",       "power"),
     "camasir_makinesi": ("Camasir Makinesi",  "local_laundry_service"),
     "firin":            ("Firin",             "microwave"),
     "utu":              ("Utu",               "iron"),
